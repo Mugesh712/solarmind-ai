@@ -5,6 +5,7 @@ export default function Sidebar({ activePage, onNavigate, apiConnected }) {
         { id: 'defects', icon: '🔍', label: 'Defect Detection' },
         { id: 'recommendations', icon: '🛠️', label: 'Recommendations' },
         { id: 'forecasting', icon: '📈', label: 'Forecasting' },
+        { id: 'simulator', icon: '🎛️', label: 'Simulator' },
         { id: 'federation', icon: '🌐', label: 'Federated Learning' },
         { id: 'model', icon: '🤖', label: 'AI Model Info' },
         { id: 'settings', icon: '⚙️', label: 'Settings' },

@@ -1,26 +1,42 @@
 """
 SolarMind AI — FastAPI Backend Server
-Provides REST API endpoints for the Solar Twin Dashboard.
+Provides REST API + WebSocket endpoints for the Solar Twin Dashboard.
 Integrates PV Panel Defect Dataset (Kaggle) and Sarvam AI for analysis.
+Supports live panel simulation via WebSocket push updates.
 """
-from fastapi import FastAPI, HTTPException, UploadFile, File  # type: ignore
+import os
+import json
+import random
+import asyncio
+from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Dict, List, Optional
+from datetime import datetime
 
 from data.simulator import (
     generate_site_data, generate_telemetry,
     generate_defect_history, generate_progression_forecast,
-    generate_weather_forecast,
+    generate_weather_forecast, ZONES, DEFECT_TYPES,
 )
 from engine.recommendation import generate_recommendations, calculate_cps
 from engine.forecasting import forecast_progression, generate_panel_history
-from engine.classifier import classify_image_bytes, get_dataset_info
+from engine.classifier import classify_image_bytes, get_dataset_info, classify_image, CLASS_NAMES as CLASSIFIER_CLASSES
 from engine.sarvam_client import generate_analysis, get_api_status
-from models.vit_classifier import simulate_inference, get_model_info, simulate_batch_inference
+from models.vit_classifier import run_inference, get_model_info, simulate_batch_inference
 
-# Global state (simulated database)
+# ──────────────────────────────────────────────
+# Global state
+# ──────────────────────────────────────────────
 SITE_DATA: Dict[str, Any] = {}
+CONNECTED_CLIENTS: List[WebSocket] = []
+ACTIVITY_LOG: List[Dict[str, Any]] = []
+
+# Dataset path for picking real images
+DATASET_DIR: str = os.path.join(os.path.dirname(__file__), "data", "pv_defect_dataset")
+
+# Defect types that match the dataset folder names
+DATASET_DEFECT_CLASSES: List[str] = ["Bird-drop", "Clean", "Dusty", "Electrical-damage", "Physical-Damage", "Snow-Covered"]
 
 
 def _find_panel(panel_id: str) -> Dict[str, Any]:
@@ -33,6 +49,103 @@ def _find_panel(panel_id: str) -> Dict[str, Any]:
     raise HTTPException(status_code=404, detail=f"Panel {panel_id} not found")
 
 
+def _recalculate_kpis() -> None:
+    """Recalculate KPI counts after panel state changes."""
+    panels = SITE_DATA.get("panels", [])
+    healthy = sum(1 for p in panels if p["defect"] == "normal" or p["defect"] == "Clean")
+    faulty = len(panels) - healthy
+    critical = sum(1 for p in panels if p.get("severity", 0) > 0.7)
+    SITE_DATA["kpis"]["healthy_panels"] = healthy
+    SITE_DATA["kpis"]["faulty_panels"] = faulty
+    SITE_DATA["kpis"]["critical_alerts"] = critical
+
+    # Recalculate zone health
+    for zone in ZONES:
+        zone_panels = [p for p in panels if p["zone"] == zone]
+        zone_healthy = sum(1 for p in zone_panels if p["defect"] in ("normal", "Clean"))
+        total = len(zone_panels)
+        SITE_DATA["zone_health"][zone] = {
+            "total": total,
+            "healthy": zone_healthy,
+            "health_pct": round(zone_healthy / total * 100, 1) if total > 0 else 0.0,
+        }
+
+
+def _pick_dataset_image(defect_class: str) -> Optional[str]:
+    """Pick a random real image from the dataset for a given defect class."""
+    for split in ["train", "test", "val"]:
+        class_dir = os.path.join(DATASET_DIR, split, defect_class)
+        if os.path.isdir(class_dir):
+            images = [
+                f for f in os.listdir(class_dir)
+                if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp"))
+            ]
+            if images:
+                chosen = random.choice(images)
+                return os.path.join(class_dir, chosen)
+    return None
+
+
+def _update_panel_defect(panel: Dict[str, Any], defect_class: str, severity: float) -> Dict[str, Any]:
+    """Update a panel's defect state and return classification result."""
+    # Map dataset class names back to simulator's internal names for compatibility
+    panel["defect"] = defect_class
+    panel["severity"] = severity
+    panel["confidence"] = 0.95
+    panel["status"] = "healthy" if defect_class == "Clean" else ("critical" if severity > 0.7 else "warning")
+    panel["last_inspection"] = datetime.now().strftime("%Y-%m-%d")
+
+    # Try to run real ViT classification on a dataset image
+    classification_result: Dict[str, Any] = {"mode": "manual", "predicted_class": defect_class}
+    image_path = _pick_dataset_image(defect_class)
+    if image_path:
+        try:
+            result = classify_image(image_path)
+            classification_result = result
+            # Update panel confidence from real model
+            panel["confidence"] = round(result.get("confidence", 0.95), 3)
+        except Exception as e:
+            classification_result["error"] = str(e)
+
+    return classification_result
+
+
+async def _broadcast(message: Dict[str, Any]) -> None:
+    """Broadcast a message to all connected WebSocket clients."""
+    if not CONNECTED_CLIENTS:
+        return
+    data = json.dumps(message, default=str)
+    disconnected: List[WebSocket] = []
+    for client in CONNECTED_CLIENTS:
+        try:
+            await client.send_text(data)
+        except Exception:
+            disconnected.append(client)
+    for client in disconnected:
+        if client in CONNECTED_CLIENTS:
+            CONNECTED_CLIENTS.remove(client)
+
+
+def _add_activity(action: str, panel_id: str, defect: str, details: str = "") -> Dict[str, Any]:
+    """Add entry to activity log."""
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "action": action,
+        "panel_id": panel_id,
+        "defect": defect,
+        "details": details,
+    }
+    ACTIVITY_LOG.insert(0, entry)
+    # Keep only last 50 entries
+    while len(ACTIVITY_LOG) > 50:
+        ACTIVITY_LOG.pop()
+    return entry
+
+
+# ──────────────────────────────────────────────
+# App setup
+# ──────────────────────────────────────────────
+
 @asynccontextmanager
 async def lifespan(app: Any) -> AsyncGenerator[None, None]:
     """Initialize simulated data on startup."""
@@ -40,6 +153,7 @@ async def lifespan(app: Any) -> AsyncGenerator[None, None]:
     SITE_DATA = generate_site_data()
     panels: List[Any] = SITE_DATA["panels"]
     print(f"SolarMind AI Backend initialized with {len(panels)} panels")
+    print(f"Dataset available: {os.path.isdir(DATASET_DIR)}")
     yield
     print("SolarMind AI Backend shutting down")
 
@@ -47,7 +161,7 @@ async def lifespan(app: Any) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title="SolarMind AI API",
     description="Decision-Intelligent Predictive Maintenance for Solar Farms",
-    version="1.0.0",
+    version="2.0.0",
     lifespan=lifespan,
 )
 
@@ -59,6 +173,186 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ──────────────────────────────────────────────
+# WEBSOCKET ENDPOINT
+# ──────────────────────────────────────────────
+
+@app.websocket("/ws/live")
+async def websocket_endpoint(websocket: WebSocket) -> None:
+    """
+    Live update WebSocket. Clients connect to receive real-time panel changes.
+    On connect, sends current panel summary. Then pushes updates as they happen.
+    """
+    await websocket.accept()
+    CONNECTED_CLIENTS.append(websocket)
+    print(f"[WS] Client connected. Total: {len(CONNECTED_CLIENTS)}")
+
+    # Send initial state summary
+    try:
+        panels = SITE_DATA.get("panels", [])
+        await websocket.send_text(json.dumps({
+            "type": "init",
+            "total_panels": len(panels),
+            "kpis": SITE_DATA.get("kpis", {}),
+            "connected_clients": len(CONNECTED_CLIENTS),
+        }, default=str))
+    except Exception:
+        pass
+
+    try:
+        while True:
+            # Keep connection alive, wait for client messages (ping/pong)
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text(json.dumps({"type": "pong"}))
+    except WebSocketDisconnect:
+        pass
+    finally:
+        if websocket in CONNECTED_CLIENTS:
+            CONNECTED_CLIENTS.remove(websocket)
+        print(f"[WS] Client disconnected. Total: {len(CONNECTED_CLIENTS)}")
+
+
+# ──────────────────────────────────────────────
+# SIMULATOR API ENDPOINTS
+# ──────────────────────────────────────────────
+
+@app.post("/api/simulate/panel/{panel_id}")
+async def simulate_panel_change(
+    panel_id: str,
+    defect: str = "Clean",
+    severity: float = 0.0,
+) -> Dict[str, Any]:
+    """
+    Change a panel's defect state. Picks a real image from the dataset,
+    runs ViT classifier, updates panel, and broadcasts via WebSocket.
+    """
+    panel = _find_panel(panel_id)
+
+    if defect not in DATASET_DEFECT_CLASSES:
+        raise HTTPException(status_code=400, detail=f"Invalid defect type. Must be one of: {DATASET_DEFECT_CLASSES}")
+
+    severity = max(0.0, min(1.0, severity))
+    if defect == "Clean":
+        severity = 0.0
+
+    # Run real classification on dataset image
+    classification = _update_panel_defect(panel, defect, severity)
+    _recalculate_kpis()
+
+    # Log the activity
+    activity = _add_activity(
+        "defect_set", panel_id, defect,
+        f"Severity: {severity:.2f}, Model: {classification.get('mode', 'unknown')}"
+    )
+
+    # Broadcast update to all WebSocket clients
+    await _broadcast({
+        "type": "panel_update",
+        "panel": panel,
+        "classification": classification,
+        "activity": activity,
+        "kpis": SITE_DATA["kpis"],
+        "zone_health": SITE_DATA["zone_health"],
+    })
+
+    return {
+        "status": "updated",
+        "panel": panel,
+        "classification": classification,
+        "activity": activity,
+    }
+
+
+@app.post("/api/simulate/event")
+async def simulate_event(event_type: str = "dust_storm") -> Dict[str, Any]:
+    """
+    Trigger a bulk simulation event.
+    Events: dust_storm, bird_event, maintenance, reset
+    """
+    panels = SITE_DATA.get("panels", [])
+    affected: List[str] = []
+
+    if event_type == "dust_storm":
+        # Make 8-12 random clean panels dusty
+        clean_panels = [p for p in panels if p["defect"] in ("normal", "Clean")]
+        count = min(random.randint(8, 12), len(clean_panels))
+        targets = random.sample(clean_panels, count)
+        for p in targets:
+            _update_panel_defect(p, "Dusty", round(random.uniform(0.3, 0.7), 2))
+            affected.append(p["id"])
+            _add_activity("dust_storm", p["id"], "Dusty", "Dust storm event")
+
+    elif event_type == "bird_event":
+        # Make 2-4 random clean panels have bird-drops
+        clean_panels = [p for p in panels if p["defect"] in ("normal", "Clean")]
+        count = min(random.randint(2, 4), len(clean_panels))
+        targets = random.sample(clean_panels, count)
+        for p in targets:
+            _update_panel_defect(p, "Bird-drop", round(random.uniform(0.2, 0.6), 2))
+            affected.append(p["id"])
+            _add_activity("bird_event", p["id"], "Bird-drop", "Bird event")
+
+    elif event_type == "maintenance":
+        # Clean all dusty and bird-drop panels
+        dirty_panels = [p for p in panels if p["defect"] in ("Dusty", "dust_soiling", "Bird-drop")]
+        for p in dirty_panels:
+            _update_panel_defect(p, "Clean", 0.0)
+            affected.append(p["id"])
+            _add_activity("maintenance", p["id"], "Clean", "Maintenance crew cleaned")
+
+    elif event_type == "reset":
+        # Reset all panels to Clean
+        for p in panels:
+            _update_panel_defect(p, "Clean", 0.0)
+            affected.append(p["id"])
+        ACTIVITY_LOG.clear()
+        _add_activity("reset", "ALL", "Clean", "Full farm reset")
+
+    else:
+        raise HTTPException(status_code=400, detail=f"Unknown event: {event_type}. Use: dust_storm, bird_event, maintenance, reset")
+
+    _recalculate_kpis()
+
+    # Broadcast full update
+    await _broadcast({
+        "type": "bulk_update",
+        "event": event_type,
+        "affected_count": len(affected),
+        "affected_panels": affected,
+        "panels": panels,
+        "kpis": SITE_DATA["kpis"],
+        "zone_health": SITE_DATA["zone_health"],
+        "activity_log": ACTIVITY_LOG[:10],
+    })
+
+    return {
+        "status": "completed",
+        "event": event_type,
+        "affected_count": len(affected),
+        "affected_panels": affected,
+    }
+
+
+@app.get("/api/simulate/status")
+async def simulate_status() -> Dict[str, Any]:
+    """Get simulator status including connected clients and activity log."""
+    panels = SITE_DATA.get("panels", [])
+    defect_counts: Dict[str, int] = {}
+    for p in panels:
+        d = p["defect"]
+        defect_counts[d] = defect_counts.get(d, 0) + 1
+
+    return {
+        "connected_clients": len(CONNECTED_CLIENTS),
+        "total_panels": len(panels),
+        "defect_counts": defect_counts,
+        "activity_log": ACTIVITY_LOG[:20],
+        "dataset_available": os.path.isdir(DATASET_DIR),
+        "defect_classes": DATASET_DEFECT_CLASSES,
+    }
 
 
 # ──────────────────────────────────────────────
@@ -130,7 +424,7 @@ async def sarvam_status() -> Dict[str, Any]:
 
 @app.get("/")
 async def root() -> Dict[str, str]:
-    return {"message": "SolarMind AI API v1.0", "status": "online"}
+    return {"message": "SolarMind AI API v2.0", "status": "online"}
 
 
 @app.get("/api/site")
@@ -203,7 +497,7 @@ async def get_forecast(panel_id: str, days: int = 90) -> Dict[str, Any]:
 @app.get("/api/detect/{panel_id}")
 async def detect_defect(panel_id: str) -> Dict[str, Any]:
     _find_panel(panel_id)
-    return simulate_inference(panel_id)
+    return run_inference(panel_id=panel_id)
 
 
 @app.get("/api/detect/batch/{count}")

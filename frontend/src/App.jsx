@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import Sidebar from './components/Sidebar'
 import SiteOverview from './components/SiteOverview'
 import PanelHeatmap from './components/PanelHeatmap'
@@ -12,8 +12,10 @@ import ProgressionChart from './components/ProgressionChart'
 import AttentionMap from './components/AttentionMap'
 import PanelDetail from './components/PanelDetail'
 import ImageUpload from './components/ImageUpload'
+import PanelSimulator from './components/PanelSimulator'
 
 const API_BASE = 'http://localhost:8000'
+const WS_URL = 'ws://localhost:8000/ws/live'
 
 function App() {
     const [siteData, setSiteData] = useState(null)
@@ -24,10 +26,103 @@ function App() {
     const [activePage, setActivePage] = useState('dashboard')
     const [loading, setLoading] = useState(true)
     const [apiConnected, setApiConnected] = useState(false)
+    const [toasts, setToasts] = useState([])
+    const [wsConnected, setWsConnected] = useState(false)
+    const wsRef = useRef(null)
+    const reconnectTimer = useRef(null)
 
     useEffect(() => {
         fetchData()
     }, [])
+
+    // WebSocket connection
+    useEffect(() => {
+        if (!apiConnected) return
+
+        const connectWs = () => {
+            const ws = new WebSocket(WS_URL)
+
+            ws.onopen = () => {
+                setWsConnected(true)
+                console.log('[WS] Connected')
+            }
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data)
+                    handleWsMessage(data)
+                } catch (e) {
+                    console.error('[WS] Parse error:', e)
+                }
+            }
+
+            ws.onclose = () => {
+                setWsConnected(false)
+                console.log('[WS] Disconnected, reconnecting in 3s...')
+                reconnectTimer.current = setTimeout(connectWs, 3000)
+            }
+
+            ws.onerror = () => {
+                ws.close()
+            }
+
+            wsRef.current = ws
+        }
+
+        connectWs()
+
+        // Ping every 30s to keep alive
+        const pingInterval = setInterval(() => {
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send('ping')
+            }
+        }, 30000)
+
+        return () => {
+            clearInterval(pingInterval)
+            clearTimeout(reconnectTimer.current)
+            wsRef.current?.close()
+        }
+    }, [apiConnected])
+
+    const handleWsMessage = useCallback((data) => {
+        if (data.type === 'panel_update') {
+            // Single panel changed
+            setPanels(prev => prev.map(p =>
+                p.id === data.panel.id ? data.panel : p
+            ))
+            if (data.kpis) {
+                setSiteData(prev => prev ? { ...prev, kpis: data.kpis, zone_health: data.zone_health } : prev)
+            }
+            // Show toast for defect detections
+            if (data.panel.defect !== 'Clean' && data.panel.defect !== 'normal') {
+                addToast(`🚨 ${data.panel.id}: ${data.panel.defect} detected!`, 'warning')
+            }
+        } else if (data.type === 'bulk_update') {
+            // Bulk event (dust storm, maintenance, etc.)
+            if (data.panels) {
+                setPanels([...data.panels])
+            }
+            if (data.kpis) {
+                setSiteData(prev => prev ? { ...prev, kpis: data.kpis, zone_health: data.zone_health } : prev)
+            }
+            const eventNames = {
+                dust_storm: '☁️ Dust Storm',
+                bird_event: '🐦 Bird Event',
+                maintenance: '🧹 Maintenance Complete',
+                reset: '🔄 Farm Reset',
+            }
+            addToast(`${eventNames[data.event] || data.event}: ${data.affected_count} panels affected`, 'info')
+        }
+    }, [])
+
+    const addToast = (message, type = 'info') => {
+        const id = Date.now()
+        setToasts(prev => [...prev, { id, message, type }])
+        setTimeout(() => {
+            setToasts(prev => prev.filter(t => t.id !== id))
+        }, 5000)
+    }
 
     const fetchData = async () => {
         try {
@@ -57,7 +152,6 @@ function App() {
     }
 
     const loadFallbackData = () => {
-        // Generate client-side fallback data when backend is not running
         const zones = ['Zone A', 'Zone B', 'Zone C', 'Zone D', 'Zone E']
         const defectTypes = ['normal', 'micro_crack', 'hotspot', 'dust_soiling']
         const fallbackPanels = []
@@ -154,7 +248,6 @@ function App() {
                 detail = await res.json()
             } catch { /* use basic detail */ }
         } else {
-            // generate simple fallback history + forecast
             const hist = Array.from({ length: 6 }, (_, i) => {
                 const d = new Date(); d.setDate(d.getDate() - (6 - i) * 30)
                 const sev = panel.defect === 'normal' ? 0 : +(panel.severity * (0.5 + 0.5 * i / 5) + (Math.random() * 0.06 - 0.03)).toFixed(3)
@@ -185,6 +278,7 @@ function App() {
         defects: '🔍 Defect Detection & Analysis',
         recommendations: '🛠️ Maintenance Recommendations',
         forecasting: '📈 Defect Forecasting',
+        simulator: '🎛️ Panel Simulator',
         federation: '🌐 Federated Learning',
         model: '🤖 AI Model Info',
         settings: '⚙️ Settings',
@@ -211,7 +305,7 @@ function App() {
                             <ImageUpload />
                         </div>
                         <div className="grid-bottom">
-                            <AttentionMap panel={panels.find(p => p.defect !== 'normal') || panels[0]} />
+                            <AttentionMap panel={panels.find(p => p.defect !== 'normal' && p.defect !== 'Clean') || panels[0]} />
                             <DefectDistribution panels={panels} />
                         </div>
                     </>
@@ -242,6 +336,12 @@ function App() {
                             <EnergyImpact panels={panels} kpis={siteData?.kpis} />
                         </div>
                     </>
+                )
+            case 'simulator':
+                return (
+                    <div className="grid-full">
+                        <PanelSimulator panels={panels} onPanelsChanged={fetchData} />
+                    </div>
                 )
             case 'federation':
                 return (
@@ -332,6 +432,10 @@ function App() {
                                     <span style={{ color: apiConnected ? 'var(--accent-green)' : 'var(--accent-red)', fontSize: '0.85rem', fontWeight: 600 }}>{apiConnected ? 'Connected' : 'Disconnected'}</span>
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-sm)' }}>
+                                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>WebSocket</span>
+                                    <span style={{ color: wsConnected ? 'var(--accent-green)' : 'var(--accent-red)', fontSize: '0.85rem', fontWeight: 600 }}>{wsConnected ? 'Live' : 'Disconnected'}</span>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-sm)' }}>
                                     <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Total Panels</span>
                                     <span style={{ color: 'var(--text-primary)', fontSize: '0.85rem', fontWeight: 600 }}>{panels.length}</span>
                                 </div>
@@ -369,7 +473,7 @@ function App() {
                         </div>
                         <div className="grid-bottom">
                             <ProgressionChart panels={panels} />
-                            <AttentionMap panel={panels.find(p => p.defect !== 'normal') || panels[0]} />
+                            <AttentionMap panel={panels.find(p => p.defect !== 'normal' && p.defect !== 'Clean') || panels[0]} />
                         </div>
                         <div className="grid-full">
                             <WeatherWidget forecast={weather} />
@@ -392,6 +496,7 @@ function App() {
                         <span className={`header-badge ${apiConnected ? 'live' : 'demo'}`}>
                             {apiConnected ? '⚡ Live' : '📡 Demo Mode'}
                         </span>
+                        {wsConnected && <span className="header-badge live">🔌 WebSocket</span>}
                         {apiConnected && <span className="header-badge live">Live Monitoring</span>}
                     </div>
                 </div>
@@ -405,6 +510,16 @@ function App() {
                         onClose={() => setSelectedPanel(null)}
                     />
                 )}
+
+                {/* Toast Notifications */}
+                <div className="toast-container">
+                    {toasts.map(toast => (
+                        <div key={toast.id} className={`toast toast-${toast.type}`}>
+                            <span>{toast.message}</span>
+                            <button className="toast-close" onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}>×</button>
+                        </div>
+                    ))}
+                </div>
             </main>
         </div>
     )
