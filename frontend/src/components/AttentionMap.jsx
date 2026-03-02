@@ -6,7 +6,7 @@ export default function AttentionMap({ panel }) {
         const gridSize = 14  // ViT-Base/16 produces 14x14 patch grid for 224x224 input
         const grid = []
 
-        const hasDefect = panel && panel.defect !== 'normal'
+        const hasDefect = panel && panel.defect !== 'normal' && panel.defect !== 'Clean'
         // Primary attention center (where the defect is)
         const cx = hasDefect ? (Math.random() * 6 + 4) : 7
         const cy = hasDefect ? (Math.random() * 6 + 4) : 7
@@ -76,7 +76,7 @@ export default function AttentionMap({ panel }) {
                     textAlign: 'center',
                 }}>
                     <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)', marginBottom: 2 }}>Prediction</div>
-                    <div style={{ fontSize: '0.75rem', fontWeight: 600, color: panel?.defect !== 'normal' ? 'var(--accent-red)' : 'var(--accent-green)' }}>{defectLabel}</div>
+                    <div style={{ fontSize: '0.75rem', fontWeight: 600, color: (panel?.defect !== 'normal' && panel?.defect !== 'Clean') ? 'var(--accent-red)' : 'var(--accent-green)' }}>{defectLabel}</div>
                 </div>
                 <div style={{
                     flex: 1, padding: '8px 10px', borderRadius: 'var(--radius-sm)',

@@ -10,7 +10,7 @@ export default function PanelDetail({ detail, onClose }) {
 
     // Simulated attention regions for heatmap
     const attentionRegions = useMemo(() => {
-        if (panel.defect === 'normal') return []
+        if (panel.defect === 'normal' || panel.defect === 'Clean') return []
         const count = Math.floor(Math.random() * 3) + 1
         return Array.from({ length: count }, () => ({
             x: Math.random() * 70 + 10,
@@ -39,8 +39,8 @@ export default function PanelDetail({ detail, onClose }) {
                 {/* Status Banner */}
                 <div style={{
                     display: 'flex', gap: 16, marginBottom: 20, padding: '14px', borderRadius: 'var(--radius-sm)',
-                    background: panel.defect === 'normal' ? 'rgba(52,211,153,0.08)' : 'rgba(248,113,113,0.08)',
-                    border: `1px solid ${panel.defect === 'normal' ? 'rgba(52,211,153,0.2)' : 'rgba(248,113,113,0.2)'}`,
+                    background: (panel.defect === 'normal' || panel.defect === 'Clean') ? 'rgba(52,211,153,0.08)' : 'rgba(248,113,113,0.08)',
+                    border: `1px solid ${(panel.defect === 'normal' || panel.defect === 'Clean') ? 'rgba(52,211,153,0.2)' : 'rgba(248,113,113,0.2)'}`,
                 }}>
                     <div style={{ textAlign: 'center', flex: 1 }}>
                         <div style={{ fontSize: '1.4rem', fontWeight: 800, color: statusColor }}>{defectLabel}</div>
@@ -77,7 +77,7 @@ export default function PanelDetail({ detail, onClose }) {
                 </div>
 
                 {/* Attention Heatmap */}
-                {panel.defect !== 'normal' && (
+                {panel.defect !== 'normal' && panel.defect !== 'Clean' && (
                     <div style={{ marginBottom: 20 }}>
                         <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                             🔬 ViT Attention Map
@@ -106,7 +106,7 @@ export default function PanelDetail({ detail, onClose }) {
                 )}
 
                 {/* Progression Forecast Chart */}
-                {trajectory.length > 0 && panel.defect !== 'normal' && (
+                {trajectory.length > 0 && panel.defect !== 'normal' && panel.defect !== 'Clean' && (
                     <div style={{ marginBottom: 20 }}>
                         <div style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                             📈 Defect Progression Forecast (90 days)

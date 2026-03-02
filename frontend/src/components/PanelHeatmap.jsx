@@ -4,7 +4,7 @@ export default function PanelHeatmap({ panels, onPanelClick }) {
     const [hoveredPanel, setHoveredPanel] = useState(null)
 
     const getStatusClass = (panel) => {
-        if (panel.defect === 'normal') return 'healthy'
+        if (panel.defect === 'normal' || panel.defect === 'Clean') return 'healthy'
         if (panel.severity > 0.7) return 'critical'
         return 'warning'
     }
@@ -48,7 +48,7 @@ export default function PanelHeatmap({ panels, onPanelClick }) {
                 </div>
             </div>
 
-            {hoveredPanel && hoveredPanel.defect !== 'normal' && (
+            {hoveredPanel && hoveredPanel.defect !== 'normal' && hoveredPanel.defect !== 'Clean' && (
                 <div style={{
                     marginTop: 12,
                     padding: '10px 14px',
