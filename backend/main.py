@@ -5,6 +5,12 @@ Integrates PV Panel Defect Dataset (Kaggle) and Sarvam AI for analysis.
 Supports live panel simulation via WebSocket push updates.
 """
 import os
+# Load .env file if it exists (for SARVAM_API_KEY etc.)
+try:
+    from dotenv import load_dotenv  # type: ignore
+    load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
+except ImportError:
+    pass
 import json
 import random
 import asyncio

@@ -11,7 +11,9 @@ import json
 from typing import Any, Dict, List, Optional
 
 # API Configuration
-SARVAM_API_KEY: str = os.environ.get("SARVAM_API_KEY", "")
+def _get_api_key() -> str:
+    """Read API key dynamically so it picks up changes after import."""
+    return os.environ.get("SARVAM_API_KEY", "")
 SARVAM_API_URL: str = "https://api.sarvam.ai/v1/chat/completions"
 SARVAM_MODEL: str = "sarvam-m"
 
@@ -37,7 +39,7 @@ def _has_sarvamai() -> bool:
 def get_api_status() -> Dict[str, Any]:
     """Check Sarvam AI API configuration status."""
     return {
-        "api_configured": bool(SARVAM_API_KEY),
+        "api_configured": bool(_get_api_key()),
         "model": SARVAM_MODEL,
         "sdk_available": _has_sarvamai(),
         "requests_available": _has_requests(),
@@ -80,7 +82,7 @@ Provide your analysis in this format:
 Keep your response concise (under 200 words)."""
 
     # Try Sarvam AI API first
-    if SARVAM_API_KEY and _has_requests():
+    if _get_api_key() and _has_requests():
         api_result: Optional[str] = _call_sarvam_api(prompt)
         if api_result is not None:
             return {
@@ -106,7 +108,7 @@ def _call_sarvam_api(prompt: str) -> Optional[str]:
 
     headers: Dict[str, str] = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {SARVAM_API_KEY}",
+        "Authorization": f"Bearer {_get_api_key()}",
     }
 
     payload: Dict[str, Any] = {
