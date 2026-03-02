@@ -215,7 +215,7 @@ export default function ImageUpload() {
                         </h5>
                         <div className="analysis-text">
                             {result.analysis?.analysis?.split('\n').map((line, i) => (
-                                <p key={i}>{line.replace(/\*\*/g, '')}</p>
+                                <p key={i} dangerouslySetInnerHTML={{ __html: line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') }} />
                             ))}
                         </div>
                         <span className="analysis-source">
