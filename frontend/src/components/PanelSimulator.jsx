@@ -268,9 +268,29 @@ export default function PanelSimulator({ panels = [] }) {
                             {eventLoading === 'bird_event' ? '⏳' : '🐦'} Bird Event
                             <span className="event-desc">~3 panels get bird-drops</span>
                         </button>
+                        <button className="event-btn snow" onClick={() => triggerEvent('snow_storm')} disabled={!!eventLoading}>
+                            {eventLoading === 'snow_storm' ? '⏳' : '❄️'} Snow Storm
+                            <span className="event-desc">~6 panels covered in snow</span>
+                        </button>
+                        <button className="event-btn electrical" onClick={() => triggerEvent('electrical_fault')} disabled={!!eventLoading}>
+                            {eventLoading === 'electrical_fault' ? '⏳' : '⚡'} Electrical Fault
+                            <span className="event-desc">~2 panels damaged</span>
+                        </button>
+                        <button className="event-btn physical" onClick={() => triggerEvent('physical_damage')} disabled={!!eventLoading}>
+                            {eventLoading === 'physical_damage' ? '⏳' : '💥'} Hail / Impact
+                            <span className="event-desc">~3 panels cracked</span>
+                        </button>
+                        <button className="event-btn random" onClick={() => triggerEvent('random_defects')} disabled={!!eventLoading}>
+                            {eventLoading === 'random_defects' ? '⏳' : '🎲'} Random Defects
+                            <span className="event-desc">~20 mixed defects</span>
+                        </button>
                         <button className="event-btn clean" onClick={() => triggerEvent('maintenance')} disabled={!!eventLoading}>
-                            {eventLoading === 'maintenance' ? '⏳' : '🧹'} Maintenance
-                            <span className="event-desc">Clean all dusty panels</span>
+                            {eventLoading === 'maintenance' ? '⏳' : '🧹'} Quick Clean
+                            <span className="event-desc">Clean dusty & bird-drop panels</span>
+                        </button>
+                        <button className="event-btn clean" onClick={() => triggerEvent('full_maintenance')} disabled={!!eventLoading}>
+                            {eventLoading === 'full_maintenance' ? '⏳' : '🔧'} Full Maintenance
+                            <span className="event-desc">Fix all defective panels</span>
                         </button>
                         <button className="event-btn reset" onClick={() => triggerEvent('reset')} disabled={!!eventLoading}>
                             {eventLoading === 'reset' ? '⏳' : '🔄'} Reset All

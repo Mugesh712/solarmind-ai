@@ -2,8 +2,6 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import Sidebar from './components/Sidebar'
 import SiteOverview from './components/SiteOverview'
 import PanelHeatmap from './components/PanelHeatmap'
-import RecommendationQueue from './components/RecommendationQueue'
-import EnergyImpact from './components/EnergyImpact'
 import KPIMetrics from './components/KPIMetrics'
 import ZoneHealth from './components/ZoneHealth'
 import DefectDistribution from './components/DefectDistribution'
@@ -429,25 +427,10 @@ function App() {
 
                         {/* ViT Attention Map — only after analysis */}
                         {defectAnalysis && (
-                            <div className="grid-full">
+                            <div className="grid-bottom">
                                 <AttentionMap panel={selectedHeatmapPanel || panels[0]} />
                             </div>
                         )}
-                    </>
-                )
-            case 'recommendations':
-                return (
-                    <>
-                        <div className="grid-full">
-                            <RecommendationQueue recommendations={recommendations} onItemClick={(rec) => {
-                                const panel = panels.find(p => p.id === rec.panel_id)
-                                if (panel) handlePanelClick(panel)
-                            }} />
-                        </div>
-                        <div className="grid-bottom">
-                            <EnergyImpact panels={panels} kpis={siteData?.kpis} />
-                            <KPIMetrics kpis={siteData?.kpis} />
-                        </div>
                     </>
                 )
             case 'forecasting':
@@ -456,9 +439,8 @@ function App() {
                         <div className="grid-full">
                             <ProgressionChart panels={panels} />
                         </div>
-                        <div className="grid-bottom">
+                        <div className="grid-full">
                             <WeatherWidget forecast={weather} />
-                            <EnergyImpact panels={panels} kpis={siteData?.kpis} />
                         </div>
                     </>
                 )
@@ -582,20 +564,11 @@ function App() {
                             <ImageUpload />
                         </div>
                         <div className="grid-main">
-                            <RecommendationQueue recommendations={recommendations} onItemClick={(rec) => {
-                                const panel = panels.find(p => p.id === rec.panel_id)
-                                if (panel) handlePanelClick(panel)
-                            }} />
                             <DefectDistribution panels={panels} />
-                        </div>
-                        <div className="grid-full">
-                            <EnergyImpact panels={panels} kpis={siteData?.kpis} />
+                            <KPIMetrics kpis={siteData?.kpis} />
                         </div>
                         <div className="grid-bottom">
                             <ZoneHealth zones={siteData?.zone_health} />
-                            <KPIMetrics kpis={siteData?.kpis} />
-                        </div>
-                        <div className="grid-full">
                             <WeatherWidget forecast={weather} />
                         </div>
                     </>

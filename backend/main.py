@@ -313,6 +313,57 @@ async def simulate_event(event_type: str = "dust_storm") -> Dict[str, Any]:
             affected.append(p["id"])
             _add_activity("maintenance", p["id"], "Clean", "Maintenance crew cleaned")
 
+    elif event_type == "snow_storm":
+        # Cover 5-8 random panels with snow
+        clean_panels = [p for p in panels if p["defect"] in ("normal", "Clean")]
+        count = min(random.randint(5, 8), len(clean_panels))
+        targets = random.sample(clean_panels, count)
+        for p in targets:
+            _update_panel_defect(p, "Snow-Covered", round(random.uniform(0.5, 0.9), 2))
+            affected.append(p["id"])
+            _add_activity("snow_storm", p["id"], "Snow-Covered", "Snow storm event")
+
+    elif event_type == "electrical_fault":
+        # 1-3 panels get electrical damage
+        clean_panels = [p for p in panels if p["defect"] in ("normal", "Clean")]
+        count = min(random.randint(1, 3), len(clean_panels))
+        targets = random.sample(clean_panels, count)
+        for p in targets:
+            _update_panel_defect(p, "Electrical-damage", round(random.uniform(0.7, 0.95), 2))
+            affected.append(p["id"])
+            _add_activity("electrical_fault", p["id"], "Electrical-damage", "Electrical fault detected")
+
+    elif event_type == "physical_damage":
+        # 2-4 panels get physical damage (hail, impact)
+        clean_panels = [p for p in panels if p["defect"] in ("normal", "Clean")]
+        count = min(random.randint(2, 4), len(clean_panels))
+        targets = random.sample(clean_panels, count)
+        for p in targets:
+            _update_panel_defect(p, "Physical-Damage", round(random.uniform(0.6, 0.9), 2))
+            affected.append(p["id"])
+            _add_activity("physical_damage", p["id"], "Physical-Damage", "Physical damage — hail/impact")
+
+    elif event_type == "random_defects":
+        # Random mix of defects across 15-25 panels
+        clean_panels = [p for p in panels if p["defect"] in ("normal", "Clean")]
+        count = min(random.randint(15, 25), len(clean_panels))
+        targets = random.sample(clean_panels, count)
+        defect_mix = ["Dusty", "Bird-drop", "Snow-Covered", "Electrical-damage", "Physical-Damage"]
+        for p in targets:
+            d = random.choice(defect_mix)
+            sev = round(random.uniform(0.2, 0.9), 2)
+            _update_panel_defect(p, d, sev)
+            affected.append(p["id"])
+            _add_activity("random_defects", p["id"], d, "Random defect injection")
+
+    elif event_type == "full_maintenance":
+        # Full maintenance — fix ALL defective panels
+        defective = [p for p in panels if p["defect"] not in ("normal", "Clean")]
+        for p in defective:
+            _update_panel_defect(p, "Clean", 0.0)
+            affected.append(p["id"])
+            _add_activity("full_maintenance", p["id"], "Clean", "Full maintenance — all defects fixed")
+
     elif event_type == "reset":
         # Reset all panels to Clean
         for p in panels:
@@ -322,7 +373,7 @@ async def simulate_event(event_type: str = "dust_storm") -> Dict[str, Any]:
         _add_activity("reset", "ALL", "Clean", "Full farm reset")
 
     else:
-        raise HTTPException(status_code=400, detail=f"Unknown event: {event_type}. Use: dust_storm, bird_event, maintenance, reset")
+        raise HTTPException(status_code=400, detail=f"Unknown event: {event_type}")
 
     _recalculate_kpis()
 

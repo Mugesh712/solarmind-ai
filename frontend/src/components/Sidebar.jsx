@@ -3,7 +3,6 @@ export default function Sidebar({ activePage, onNavigate, apiConnected }) {
         { id: 'dashboard', icon: '📊', label: 'Dashboard' },
         { id: 'panels', icon: '🔲', label: 'Panel Map' },
         { id: 'defects', icon: '🔍', label: 'Defect Detection' },
-        { id: 'recommendations', icon: '🛠️', label: 'Recommendations' },
         { id: 'forecasting', icon: '📈', label: 'Forecasting' },
         { id: 'simulator', icon: '🎛️', label: 'Simulator' },
         { id: 'federation', icon: '🌐', label: 'Federated Learning' },
