@@ -1,0 +1,66 @@
+{
+  "metrics": {
+    "per_class": {
+      "normal": {
+        "precision": 0.9872,
+        "recall": 0.9656,
+        "f1_score": 0.9763,
+        "support": 320
+      },
+      "micro_crack": {
+        "precision": 0.9315,
+        "recall": 0.9444,
+        "f1_score": 0.9379,
+        "support": 72
+      },
+      "hotspot": {
+        "precision": 0.8542,
+        "recall": 0.9318,
+        "f1_score": 0.8913,
+        "support": 44
+      },
+      "dust_soiling": {
+        "precision": 0.8939,
+        "recall": 0.9219,
+        "f1_score": 0.9077,
+        "support": 64
+      }
+    },
+    "macro_avg": {
+      "precision": 0.9167,
+      "recall": 0.9409,
+      "f1_score": 0.9283
+    },
+    "accuracy": 0.954
+  },
+  "confusion_matrix": [
+    [
+      309,
+      3,
+      5,
+      3
+    ],
+    [
+      1,
+      68,
+      1,
+      2
+    ],
+    [
+      1,
+      0,
+      41,
+      2
+    ],
+    [
+      2,
+      2,
+      1,
+      59
+    ]
+  ],
+  "detection_metrics": {
+    "mAP50": 0.897,
+    "mAP5095": 0.74
+  }
+}

@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Build output
+frontend/dist/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Dataset (too large for GitHub — download from Kaggle)
+backend/data/pv_defect_dataset/
+
+# Trained model (too large — retrain with train_real_vit.py)
+backend/checkpoints/
+
+# Environment
+.env
+*.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
