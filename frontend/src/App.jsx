@@ -327,7 +327,7 @@ function App() {
                             }} />
                         </div>
 
-                        {/* Selected Panel Photo + Analyze Button */}
+                        {/* Selected Panel: Photo + Panel ID + Analyze Button */}
                         {selectedHeatmapPanel && (
                             <div className="grid-full">
                                 <div className="card defect-analyze-card">
@@ -343,27 +343,12 @@ function App() {
                                             ) : (
                                                 <div className="defect-panel-photo-placeholder">📷 No image assigned</div>
                                             )}
-                                            <div className="defect-panel-photo-info">
-                                                <strong>{selectedHeatmapPanel.id}</strong> • Row {selectedHeatmapPanel.row}, Col {selectedHeatmapPanel.col} • {selectedHeatmapPanel.zone}
-                                            </div>
                                         </div>
-                                        {/* Info + Analyze */}
+                                        {/* Panel ID + Analyze */}
                                         <div className="defect-panel-info-section">
-                                            <div className="defect-panel-stats">
-                                                <div className="defect-stat">
-                                                    <span className="defect-stat-label">Current Defect</span>
-                                                    <span className="defect-stat-value" style={{ color: (selectedHeatmapPanel.defect === 'normal' || selectedHeatmapPanel.defect === 'Clean') ? 'var(--accent-green)' : 'var(--accent-red)' }}>
-                                                        {selectedHeatmapPanel.defect}
-                                                    </span>
-                                                </div>
-                                                <div className="defect-stat">
-                                                    <span className="defect-stat-label">Severity</span>
-                                                    <span className="defect-stat-value">{(selectedHeatmapPanel.severity * 100).toFixed(0)}%</span>
-                                                </div>
-                                                <div className="defect-stat">
-                                                    <span className="defect-stat-label">Confidence</span>
-                                                    <span className="defect-stat-value">{(selectedHeatmapPanel.confidence * 100).toFixed(0)}%</span>
-                                                </div>
+                                            <div className="sim-panel-id">{selectedHeatmapPanel.id}</div>
+                                            <div className="sim-panel-meta">
+                                                Row {selectedHeatmapPanel.row}, Col {selectedHeatmapPanel.col} • {selectedHeatmapPanel.zone}
                                             </div>
                                             <button
                                                 className="analyze-defect-btn"
@@ -378,7 +363,7 @@ function App() {
                             </div>
                         )}
 
-                        {/* Analysis Result (same as image upload result) */}
+                        {/* Analysis Result — only after clicking Analyze Defect */}
                         {defectAnalysis && (
                             <div className="grid-full">
                                 <div className="card" style={{ padding: 20 }}>
@@ -442,11 +427,13 @@ function App() {
                             </div>
                         )}
 
-                        {/* ViT Attention Map + Distribution */}
-                        <div className="grid-bottom">
-                            <AttentionMap panel={selectedHeatmapPanel || panels.find(p => p.defect !== 'normal' && p.defect !== 'Clean') || panels[0]} />
-                            <DefectDistribution panels={panels} />
-                        </div>
+                        {/* ViT Attention Map + Distribution — only after analysis */}
+                        {defectAnalysis && (
+                            <div className="grid-bottom">
+                                <AttentionMap panel={selectedHeatmapPanel || panels[0]} />
+                                <DefectDistribution panels={panels} />
+                            </div>
+                        )}
                     </>
                 )
             case 'recommendations':
