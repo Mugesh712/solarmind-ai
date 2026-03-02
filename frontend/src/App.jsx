@@ -433,10 +433,7 @@ function App() {
                             </div>
                         )}
 
-                        {/* Image Upload + ViT Attention Map + Distribution */}
-                        <div className="grid-full">
-                            <ImageUpload />
-                        </div>
+                        {/* ViT Attention Map + Distribution */}
                         <div className="grid-bottom">
                             <AttentionMap panel={selectedHeatmapPanel || panels.find(p => p.defect !== 'normal' && p.defect !== 'Clean') || panels[0]} />
                             <DefectDistribution panels={panels} />
