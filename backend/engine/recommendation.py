@@ -3,6 +3,7 @@ SolarMind AI — CPS-Based Maintenance Recommendation Engine
 Generates prioritized maintenance actions based on Composite Priority Scoring.
 """
 import math
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 
@@ -10,6 +11,26 @@ def _r(value: float, ndigits: int = 0) -> float:
     """Type-safe rounding helper."""
     multiplier: float = 10.0 ** ndigits
     return math.floor(value * multiplier + 0.5) / multiplier
+
+
+def _calculate_crew_availability() -> float:
+    """
+    Calculate crew availability based on current day and time.
+    Weekday daytime (8-18): 0.90
+    Weekday evening (18-22): 0.50
+    Weekend daytime (8-18): 0.35
+    Night hours (22-8): 0.15
+    """
+    now = datetime.now()
+    hour = now.hour
+    is_weekend = now.weekday() >= 5  # Saturday=5, Sunday=6
+
+    if 8 <= hour < 18:
+        return 0.35 if is_weekend else 0.90
+    elif 18 <= hour < 22:
+        return 0.25 if is_weekend else 0.50
+    else:
+        return 0.15
 
 
 def calculate_cps(
@@ -47,8 +68,8 @@ def calculate_cps(
         avg_cleaning: float = total_cleaning / count
         f_weather = max(0.0, min(1.0, avg_cleaning))
 
-    # Crew availability (simulated)
-    f_crew: float = 0.75
+    # Crew availability (based on current day/time)
+    f_crew: float = _calculate_crew_availability()
 
     # Urgency (based on RUL)
     max_rul: float = 365.0

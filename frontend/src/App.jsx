@@ -381,7 +381,7 @@ function App() {
 
     return (
         <div className="app-layout">
-            <Sidebar activePage={activePage} onNavigate={setActivePage} />
+            <Sidebar activePage={activePage} onNavigate={setActivePage} apiConnected={apiConnected} />
             <main className="main-content">
                 <div className="page-header">
                     <div>
@@ -389,10 +389,10 @@ function App() {
                         <div className="breadcrumb">{siteData?.site_name} • {siteData?.location} • {siteData?.capacity_mw} MW</div>
                     </div>
                     <div className="header-actions">
-                        <span className={`header-badge ${apiConnected ? 'live' : ''}`}>
-                            {apiConnected ? 'API Connected' : 'Demo Mode'}
+                        <span className={`header-badge ${apiConnected ? 'live' : 'demo'}`}>
+                            {apiConnected ? '⚡ Live' : '📡 Demo Mode'}
                         </span>
-                        <span className="header-badge live">Live Monitoring</span>
+                        {apiConnected && <span className="header-badge live">Live Monitoring</span>}
                     </div>
                 </div>
 

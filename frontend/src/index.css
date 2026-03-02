@@ -281,6 +281,21 @@ body {
   animation: pulse-green 2s infinite;
 }
 
+.header-badge.demo {
+  border-color: rgba(251, 191, 36, 0.3);
+  color: var(--accent-yellow);
+  background: rgba(251, 191, 36, 0.08);
+}
+
+.header-badge.demo::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-yellow);
+  animation: pulse-green 2s infinite;
+}
+
 /* ── Dashboard Grid ── */
 .dashboard-grid {
   display: grid;

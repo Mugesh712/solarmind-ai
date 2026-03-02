@@ -133,16 +133,14 @@ def run_demo() -> None:
               f"Box Loss: {box_loss:.4f}  Cls Loss: {cls_loss:.4f}  "
               f"mAP@50: {mAP50:.3f}  mAP@50:95: {mAP5095:.3f}")
 
-    print("\n... (remaining epochs simulated)")
-    print("\n✅ Training complete (demo)")
-    print("   Best mAP@0.5: 0.891")
-    print("   Best mAP@0.5:0.95: 0.724")
+    print("\n[Demo] Showing first 10 epochs as sample output format.")
+    print("       With real dataset, all 100 epochs will run.")
 
 
 def main() -> None:
     if not check_ultralytics():
-        print("⚠️  ultralytics not installed. Install with: pip install ultralytics")
-        print("\nRunning demo mode...\n")
+        print("❌ ultralytics not installed. Install with: pip install ultralytics")
+        print("\nRunning demo training preview...\n")
         run_demo()
         return
 

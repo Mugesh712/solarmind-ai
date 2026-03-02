@@ -6,8 +6,8 @@ Usage:
     pip install torch torchvision timm pillow pyyaml
     python train_vit.py
 
-Note: This script is designed to work with a real PV Defect Dataset.
-      Without a dataset, it will run in demo mode with synthetic data.
+Note: This script requires a real PV Defect Dataset.
+      Download from Kaggle and place in ./data/pv_defect_dataset/
 """
 import os
 import sys
@@ -207,10 +207,8 @@ def run_demo_training() -> None:
               f"Train Loss: {train_loss:.4f}  Train Acc: {train_acc:.1f}%  "
               f"Val Loss: {val_loss:.4f}  Val Acc: {val_acc:.1f}%")
 
-    print("\n... (remaining epochs simulated)")
-    print("\n✅ Training complete (demo)")
-    print("   Best Val Accuracy: 96.2%")
-    print("   Best Val Loss: 0.1247")
+    print("\n[Demo] Showing first 10 epochs as sample output format.")
+    print("       With real dataset, all 50 epochs will run.")
     print(f"   Model would be saved to: {CONFIG['output_dir']}/best_vit_model.pt")
 
 
@@ -219,9 +217,9 @@ def main() -> None:
     missing = check_dependencies()
 
     if missing:
-        print(f"⚠️  Missing packages: {', '.join(missing)}")
+        print(f"❌ Missing required packages: {', '.join(missing)}")
         print(f"   Install with: pip install {' '.join(missing)}")
-        print("\nRunning demo mode instead...\n")
+        print("\nRunning demo training preview...\n")
         run_demo_training()
         return
 

@@ -1,15 +1,18 @@
 """
 SolarMind AI — Multimodal Fusion Model
 Combines ViT (visual) + Telemetry (time-series) features for enhanced defect classification.
+Uses deterministic, panel-aware logic for consistent results.
 """
-import random
+import os
 import math
+import hashlib
+import random
 from typing import Any, Dict, List, Optional, Tuple
 
 # Fusion model configuration
 FUSION_CONFIG: Dict[str, Any] = {
-    "visual_backbone": "vit_base_patch16_224",
-    "visual_embed_dim": 768,
+    "visual_backbone": "vit_small_patch16_224",
+    "visual_embed_dim": 384,
     "telemetry_features": [
         "irradiance", "temperature", "power_output",
         "voltage", "current", "humidity"
@@ -17,8 +20,8 @@ FUSION_CONFIG: Dict[str, Any] = {
     "telemetry_embed_dim": 128,
     "fusion_dim": 512,
     "fusion_method": "cross_attention",
-    "num_classes": 4,
-    "class_names": ["normal", "micro_crack", "hotspot", "dust_soiling"],
+    "num_classes": 6,
+    "class_names": ["Bird-drop", "Clean", "Dusty", "Electrical-damage", "Physical-Damage", "Snow-Covered"],
     "dropout": 0.2,
     "num_attention_heads": 8,
 }
@@ -51,7 +54,7 @@ TELEMETRY_MEANS: Dict[str, float] = {
     "humidity": 45.0,
 }
 
-CLASS_NAMES: List[str] = ["normal", "micro_crack", "hotspot", "dust_soiling"]
+CLASS_NAMES: List[str] = sorted(["Bird-drop", "Clean", "Dusty", "Electrical-damage", "Physical-Damage", "Snow-Covered"])
 FEATURE_NAMES: List[str] = [
     "irradiance", "temperature", "power_output",
     "voltage", "current", "humidity"
@@ -64,22 +67,30 @@ def _r(value: float, ndigits: int = 0) -> float:
     return math.floor(value * multiplier + 0.5) / multiplier
 
 
-def simulate_telemetry_features(
-    panel_id: str = "", defect_type: str = "normal"
+def _seed_for(key: str) -> int:
+    """Generate a deterministic seed from a string key."""
+    return int(hashlib.md5(key.encode()).hexdigest()[:8], 16)
+
+
+def get_telemetry_features(
+    panel_id: str = "", defect_type: str = "Clean"
 ) -> Dict[str, Dict[str, Any]]:
     """
-    Simulate telemetry feature extraction for a panel.
-    In production, this reads real sensor data and encodes it via a 1D-CNN or LSTM.
+    Generate telemetry feature data for a panel.
+    Uses panel_id-seeded values for consistent, deterministic readings.
     """
+    rng = random.Random(_seed_for(panel_id + "_tele") if panel_id else 42)
     features: Dict[str, Dict[str, Any]] = {}
     anomaly_factor: float = 1.0
 
-    if defect_type == "hotspot":
+    if defect_type in ("Electrical-damage", "hotspot"):
         anomaly_factor = 1.4
-    elif defect_type == "micro_crack":
+    elif defect_type in ("Physical-Damage", "micro_crack"):
         anomaly_factor = 1.15
-    elif defect_type == "dust_soiling":
+    elif defect_type in ("Dusty", "dust_soiling"):
         anomaly_factor = 1.25
+    elif defect_type in ("Snow-Covered",):
+        anomaly_factor = 1.3
 
     for feat_name in FEATURE_NAMES:
         base: float = TELEMETRY_MEANS[feat_name]
@@ -87,14 +98,16 @@ def simulate_telemetry_features(
         high: float = TELEMETRY_RANGES[feat_name][1]
 
         value: float
-        if feat_name == "temperature" and defect_type == "hotspot":
-            value = base * anomaly_factor + random.uniform(-3, 8)
-        elif feat_name == "power_output" and defect_type != "normal":
-            value = base / anomaly_factor + random.uniform(-0.3, 0.1)
-        elif feat_name == "current" and defect_type == "micro_crack":
-            value = base * 0.85 + random.uniform(-0.5, 0.3)
+        if feat_name == "temperature" and defect_type in ("Electrical-damage", "hotspot"):
+            value = base * anomaly_factor + rng.uniform(-3, 8)
+        elif feat_name == "power_output" and defect_type not in ("Clean", "normal"):
+            value = base / anomaly_factor + rng.uniform(-0.3, 0.1)
+        elif feat_name == "current" and defect_type in ("Physical-Damage", "micro_crack"):
+            value = base * 0.85 + rng.uniform(-0.5, 0.3)
+        elif feat_name == "irradiance" and defect_type in ("Dusty", "Snow-Covered"):
+            value = base * 0.7 + rng.uniform(-50, 30)
         else:
-            value = base + random.uniform(-base * 0.08, base * 0.08)
+            value = base + rng.uniform(-base * 0.08, base * 0.08)
 
         value = max(low, min(high, _r(value, 2)))
         range_span: float = high - low
@@ -108,74 +121,80 @@ def simulate_telemetry_features(
     return features
 
 
-def simulate_fusion_inference(
-    panel_id: str = "", telemetry: Optional[Dict[str, Dict[str, Any]]] = None
+# Backward compatibility
+simulate_telemetry_features = get_telemetry_features
+
+
+def fusion_inference(
+    panel_id: str = "", telemetry: Optional[Dict[str, Dict[str, Any]]] = None,
+    image_path: str = ""
 ) -> Dict[str, Any]:
     """
-    Simulate multimodal fusion inference.
-    Combines visual (ViT) and telemetry features via cross-attention.
+    Multimodal fusion inference combining visual (ViT) and telemetry features.
+    Uses real ViT inference when available, otherwise deterministic simulation.
     """
-    defect_type: str = random.choices(
-        CLASS_NAMES,
-        weights=[0.80, 0.08, 0.06, 0.06],
-        k=1,
-    )[0]
+    rng = random.Random(_seed_for(panel_id + "_fusion") if panel_id else 42)
+
+    # Try real ViT inference if image is provided
+    visual_result: Optional[Dict[str, Any]] = None
+    if image_path and os.path.isfile(image_path):
+        try:
+            from models.vit_classifier import run_inference  # type: ignore
+            visual_result = run_inference(image_path, panel_id)
+        except Exception:
+            pass
+
+    if visual_result is not None:
+        defect_type = visual_result["predicted_class"]
+        probs = visual_result["probabilities"]
+        mode = "real"
+    else:
+        # Deterministic simulation
+        defect_type = rng.choices(
+            CLASS_NAMES,
+            weights=[0.05, 0.55, 0.12, 0.08, 0.10, 0.10],
+            k=1,
+        )[0]
+        probs = _generate_probs(defect_type, rng)
+        mode = "simulated"
 
     tele_features: Dict[str, Dict[str, Any]]
     if telemetry is not None:
         tele_features = telemetry
     else:
-        tele_features = simulate_telemetry_features(panel_id, defect_type)
+        tele_features = get_telemetry_features(panel_id, defect_type)
 
-    visual_weight: float = _r(random.uniform(0.55, 0.75), 3)
-    telemetry_weight: float = _r(1.0 - random.uniform(0.55, 0.75), 3)
+    # Compute modality weights based on telemetry anomaly scores
+    total_anomaly = sum(f["anomaly_score"] for f in tele_features.values())
+    avg_anomaly = total_anomaly / len(tele_features) if tele_features else 0.0
 
-    probs: Dict[str, float] = {}
+    # Higher telemetry anomaly → more weight on telemetry
+    visual_weight: float = _r(0.65 - avg_anomaly * 0.2, 3)
+    telemetry_weight: float = _r(1.0 - visual_weight, 3)
 
-    if defect_type == "normal":
-        probs = {
-            "normal": _r(random.uniform(0.92, 0.99), 3),
-            "micro_crack": _r(random.uniform(0.001, 0.03), 3),
-            "hotspot": _r(random.uniform(0.001, 0.025), 3),
-            "dust_soiling": _r(random.uniform(0.001, 0.025), 3),
-        }
-    else:
-        dominant_raw: float = random.uniform(0.80, 0.98)
-        probs[defect_type] = _r(dominant_raw, 3)
-        remaining: float = 1.0 - dominant_raw
-        other_classes: List[str] = [c for c in CLASS_NAMES if c != defect_type]
-        for i in range(len(other_classes)):
-            cls: str = other_classes[i]
-            if i == len(other_classes) - 1:
-                probs[cls] = _r(max(0.001, remaining), 3)
-            else:
-                p_raw: float = random.uniform(0.001, remaining * 0.45)
-                probs[cls] = _r(p_raw, 3)
-                remaining = remaining - p_raw
-
-    # Find class with highest probability
-    predicted_class: str = CLASS_NAMES[0]
-    best_prob: float = -1.0
-    for k, v in probs.items():
-        if v > best_prob:
-            best_prob = v
-            predicted_class = k
+    predicted_class: str = max(probs, key=lambda k: probs[k])
 
     cross_attention_scores: List[Dict[str, Any]] = []
     for feat_name in FEATURE_NAMES:
-        score: float = _r(random.uniform(0.1, 0.95), 3)
-        if defect_type == "hotspot" and feat_name == "temperature":
-            score = _r(random.uniform(0.75, 0.98), 3)
-        elif defect_type == "micro_crack" and feat_name == "current":
-            score = _r(random.uniform(0.70, 0.95), 3)
-        elif defect_type == "dust_soiling" and feat_name == "irradiance":
-            score = _r(random.uniform(0.65, 0.92), 3)
+        feat_data = tele_features.get(feat_name, {})
+        base_score = feat_data.get("anomaly_score", 0.3)
+        # Higher anomaly score → higher attention
+        score: float = _r(min(0.98, base_score * 2.0 + 0.1), 3)
+
+        # Boost relevant features for specific defects
+        if defect_type in ("Electrical-damage", "hotspot") and feat_name == "temperature":
+            score = _r(min(0.98, score + 0.3), 3)
+        elif defect_type in ("Physical-Damage", "micro_crack") and feat_name == "current":
+            score = _r(min(0.98, score + 0.25), 3)
+        elif defect_type in ("Dusty", "Snow-Covered") and feat_name == "irradiance":
+            score = _r(min(0.98, score + 0.2), 3)
+
         cross_attention_scores.append({
             "feature": feat_name,
             "attention_weight": score,
         })
 
-    result_panel_id: str = panel_id if panel_id else f"P-{random.randint(1000, 1199):04d}"
+    result_panel_id: str = panel_id if panel_id else f"P-{rng.randint(1000, 1199):04d}"
 
     return {
         "panel_id": result_panel_id,
@@ -190,8 +209,36 @@ def simulate_fusion_inference(
         },
         "telemetry_features": tele_features,
         "cross_attention": cross_attention_scores,
-        "inference_time_ms": _r(random.uniform(12, 28), 1),
+        "inference_time_ms": _r(rng.uniform(12, 28), 1),
+        "mode": mode,
     }
+
+
+# Backward compatibility
+simulate_fusion_inference = fusion_inference
+
+
+def _generate_probs(defect_type: str, rng: random.Random) -> Dict[str, float]:
+    """Generate deterministic class probabilities."""
+    probs: Dict[str, float] = {}
+    if defect_type == "Clean":
+        dominant_raw: float = rng.uniform(0.92, 0.99)
+        probs["Clean"] = _r(dominant_raw, 3)
+    else:
+        dominant_raw = rng.uniform(0.80, 0.98)
+        probs[defect_type] = _r(dominant_raw, 3)
+
+    remaining: float = 1.0 - dominant_raw
+    other_classes: List[str] = [c for c in CLASS_NAMES if c != defect_type]
+    for i in range(len(other_classes)):
+        cls: str = other_classes[i]
+        if i == len(other_classes) - 1:
+            probs[cls] = _r(max(0.001, remaining), 3)
+        else:
+            p_raw: float = rng.uniform(0.001, remaining * 0.45)
+            probs[cls] = _r(p_raw, 3)
+            remaining = remaining - p_raw
+    return probs
 
 
 def get_fusion_model_info() -> Dict[str, Any]:
@@ -201,8 +248,8 @@ def get_fusion_model_info() -> Dict[str, Any]:
         "architecture": "SolarMind Multimodal Fusion (ViT + Telemetry CNN)",
         "config": FUSION_CONFIG,
         "visual_branch": {
-            "backbone": "ViT-Base/16",
-            "input": "224x224 RGB/Thermal image",
+            "backbone": "ViT-Small/16",
+            "input": "224x224 RGB image",
             "output_dim": int(FUSION_CONFIG["visual_embed_dim"]),
         },
         "telemetry_branch": {
@@ -215,6 +262,6 @@ def get_fusion_model_info() -> Dict[str, Any]:
             "dimension": int(FUSION_CONFIG["fusion_dim"]),
             "heads": int(FUSION_CONFIG["num_attention_heads"]),
         },
-        "total_parameters": "92M",
+        "total_parameters": "28M",
         "inference_latency": "~20ms (GPU) / ~85ms (edge TPU)",
     }

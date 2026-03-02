@@ -1,4 +1,4 @@
-export default function Sidebar({ activePage, onNavigate }) {
+export default function Sidebar({ activePage, onNavigate, apiConnected }) {
     const navItems = [
         { id: 'dashboard', icon: '📊', label: 'Dashboard' },
         { id: 'panels', icon: '🔲', label: 'Panel Map' },
@@ -37,14 +37,14 @@ export default function Sidebar({ activePage, onNavigate }) {
 
             <div className="sidebar-footer">
                 <div className="status-indicator">
-                    <span className="status-dot"></span>
-                    <span>System Online • TRL-8</span>
+                    <span className="status-dot" style={apiConnected ? {} : { background: 'var(--accent-yellow)', boxShadow: '0 0 8px var(--accent-yellow)' }}></span>
+                    <span>{apiConnected ? 'API Connected • TRL-8' : 'Demo Mode • Offline'}</span>
                 </div>
                 <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 8 }}>
                     Edge Node: Jetson Orin NX
                 </div>
                 <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 2 }}>
-                    Model: ViT-Base/16 v2.1
+                    Model: ViT-Small/16 v2.1
                 </div>
             </div>
         </aside>
