@@ -24,16 +24,13 @@ export default function DefectDistribution({ panels }) {
         { label: 'Snow-Covered', key: 'Snow-Covered', color: 'normal' },
     ]
 
-    // Only show bars that have non-zero counts (except healthy which always shows)
-    const visibleBars = bars.filter(b => b.key === 'healthy' || mergedCounts[b.key] > 0)
-
     return (
         <div className="card">
             <div className="card-header">
                 <span className="card-title">🔍 Defect Distribution</span>
             </div>
             <div className="defect-dist">
-                {visibleBars.map(bar => {
+                {bars.map(bar => {
                     const count = mergedCounts[bar.key] || 0
                     const pct = total > 0 ? (count / total * 100) : 0
                     return (
@@ -42,11 +39,12 @@ export default function DefectDistribution({ panels }) {
                             <div className="defect-bar-track">
                                 <div
                                     className={`defect-bar-fill ${bar.color}`}
-                                    style={{ width: `${Math.max(pct, 2)}%` }}
+                                    style={{ width: `${Math.max(pct, count > 0 ? 2 : 0)}%` }}
                                 >
                                     {pct > 5 ? `${count} (${pct.toFixed(1)}%)` : ''}
                                 </div>
                             </div>
+                            <span className="defect-count">{count} ({pct.toFixed(1)}%)</span>
                         </div>
                     )
                 })}

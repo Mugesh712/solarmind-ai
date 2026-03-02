@@ -814,6 +814,14 @@ body {
   gap: 10px;
 }
 
+.defect-count {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  min-width: 70px;
+  text-align: right;
+  white-space: nowrap;
+}
+
 .defect-label {
   font-size: 0.78rem;
   font-weight: 500;
