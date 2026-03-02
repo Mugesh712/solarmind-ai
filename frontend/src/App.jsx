@@ -427,11 +427,10 @@ function App() {
                             </div>
                         )}
 
-                        {/* ViT Attention Map + Distribution — only after analysis */}
+                        {/* ViT Attention Map — only after analysis */}
                         {defectAnalysis && (
-                            <div className="grid-bottom">
+                            <div className="grid-full">
                                 <AttentionMap panel={selectedHeatmapPanel || panels[0]} />
-                                <DefectDistribution panels={panels} />
                             </div>
                         )}
                     </>
@@ -589,13 +588,12 @@ function App() {
                             }} />
                             <DefectDistribution panels={panels} />
                         </div>
-                        <div className="grid-bottom">
+                        <div className="grid-full">
                             <EnergyImpact panels={panels} kpis={siteData?.kpis} />
-                            <ZoneHealth zones={siteData?.zone_health} />
                         </div>
                         <div className="grid-bottom">
+                            <ZoneHealth zones={siteData?.zone_health} />
                             <KPIMetrics kpis={siteData?.kpis} />
-                            <ProgressionChart panels={panels} />
                         </div>
                         <div className="grid-full">
                             <WeatherWidget forecast={weather} />
