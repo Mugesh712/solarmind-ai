@@ -28,6 +28,9 @@ function App() {
     const [apiConnected, setApiConnected] = useState(false)
     const [toasts, setToasts] = useState([])
     const [wsConnected, setWsConnected] = useState(false)
+    const [defectAnalysis, setDefectAnalysis] = useState(null)
+    const [analyzingPanel, setAnalyzingPanel] = useState(null)
+    const [selectedHeatmapPanel, setSelectedHeatmapPanel] = useState(null)
     const wsRef = useRef(null)
     const reconnectTimer = useRef(null)
 
@@ -272,6 +275,21 @@ function App() {
         )
     }
 
+    const analyzePanel = async (panel) => {
+        setAnalyzingPanel(panel.id)
+        setDefectAnalysis(null)
+        try {
+            const res = await fetch(`${API_BASE}/api/panels/${panel.id}/analyze`)
+            const data = await res.json()
+            setDefectAnalysis(data)
+        } catch (err) {
+            console.error('Panel analysis failed:', err)
+            addToast('Analysis failed — is the backend running?', 'warning')
+        } finally {
+            setAnalyzingPanel(null)
+        }
+    }
+
     const pageTitles = {
         dashboard: '☀️ Solar Twin Dashboard',
         panels: '🔲 Panel Map',
@@ -301,11 +319,126 @@ function App() {
             case 'defects':
                 return (
                     <>
+                        {/* Panel Health Map — click to select a panel */}
+                        <div className="grid-full">
+                            <PanelHeatmap panels={panels} onPanelClick={(panel) => {
+                                setSelectedHeatmapPanel(panel)
+                                setDefectAnalysis(null)
+                            }} />
+                        </div>
+
+                        {/* Selected Panel Photo + Analyze Button */}
+                        {selectedHeatmapPanel && (
+                            <div className="grid-full">
+                                <div className="card defect-analyze-card">
+                                    <div className="defect-analyze-layout">
+                                        {/* Panel Photo */}
+                                        <div className="defect-panel-photo-section">
+                                            {selectedHeatmapPanel.image_url ? (
+                                                <img
+                                                    src={`${API_BASE}${selectedHeatmapPanel.image_url}`}
+                                                    alt={`${selectedHeatmapPanel.id}`}
+                                                    className="defect-panel-photo"
+                                                />
+                                            ) : (
+                                                <div className="defect-panel-photo-placeholder">📷 No image assigned</div>
+                                            )}
+                                            <div className="defect-panel-photo-info">
+                                                <strong>{selectedHeatmapPanel.id}</strong> • Row {selectedHeatmapPanel.row}, Col {selectedHeatmapPanel.col} • {selectedHeatmapPanel.zone}
+                                            </div>
+                                        </div>
+                                        {/* Info + Analyze */}
+                                        <div className="defect-panel-info-section">
+                                            <div className="defect-panel-stats">
+                                                <div className="defect-stat">
+                                                    <span className="defect-stat-label">Current Defect</span>
+                                                    <span className="defect-stat-value" style={{ color: (selectedHeatmapPanel.defect === 'normal' || selectedHeatmapPanel.defect === 'Clean') ? 'var(--accent-green)' : 'var(--accent-red)' }}>
+                                                        {selectedHeatmapPanel.defect}
+                                                    </span>
+                                                </div>
+                                                <div className="defect-stat">
+                                                    <span className="defect-stat-label">Severity</span>
+                                                    <span className="defect-stat-value">{(selectedHeatmapPanel.severity * 100).toFixed(0)}%</span>
+                                                </div>
+                                                <div className="defect-stat">
+                                                    <span className="defect-stat-label">Confidence</span>
+                                                    <span className="defect-stat-value">{(selectedHeatmapPanel.confidence * 100).toFixed(0)}%</span>
+                                                </div>
+                                            </div>
+                                            <button
+                                                className="analyze-defect-btn"
+                                                onClick={() => analyzePanel(selectedHeatmapPanel)}
+                                                disabled={!!analyzingPanel}
+                                            >
+                                                {analyzingPanel === selectedHeatmapPanel.id ? '🔄 Analyzing...' : '🔬 Analyze Defect'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Analysis Result (same as image upload result) */}
+                        {defectAnalysis && (
+                            <div className="grid-full">
+                                <div className="card" style={{ padding: 20 }}>
+                                    <div className="card-header" style={{ marginBottom: 16 }}>
+                                        <span className="card-title">🔬 Analysis Result — {defectAnalysis.panel_id}</span>
+                                        <span className="card-badge green">{defectAnalysis.filename}</span>
+                                    </div>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '200px 1fr', gap: 20 }}>
+                                        {defectAnalysis.image_url && (
+                                            <img
+                                                src={`${API_BASE}${defectAnalysis.image_url}`}
+                                                alt="Analyzed panel"
+                                                style={{ width: '100%', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}
+                                            />
+                                        )}
+                                        <div>
+                                            <div style={{ fontSize: '1.3rem', fontWeight: 800, color: defectAnalysis.classification?.predicted_class === 'Clean' ? 'var(--accent-green)' : 'var(--accent-red)', marginBottom: 8 }}>
+                                                {defectAnalysis.classification?.predicted_class}
+                                            </div>
+                                            <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: 12 }}>
+                                                Confidence: <strong>{((defectAnalysis.classification?.confidence || 0) * 100).toFixed(1)}%</strong>
+                                                {' • Mode: '}<strong>{defectAnalysis.classification?.mode}</strong>
+                                            </div>
+                                            {/* Probabilities */}
+                                            {defectAnalysis.classification?.probabilities && (
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+                                                    {Object.entries(defectAnalysis.classification.probabilities)
+                                                        .sort(([, a], [, b]) => b - a)
+                                                        .map(([cls, prob]) => (
+                                                            <span key={cls} style={{
+                                                                padding: '4px 10px', borderRadius: 'var(--radius-pill)',
+                                                                background: prob > 0.5 ? 'rgba(239,68,68,0.12)' : 'var(--bg-secondary)',
+                                                                fontSize: '0.72rem', fontWeight: 600,
+                                                                color: prob > 0.5 ? 'var(--accent-red)' : 'var(--text-muted)',
+                                                                border: '1px solid var(--border-color)',
+                                                            }}>
+                                                                {cls}: {(prob * 100).toFixed(1)}%
+                                                            </span>
+                                                        ))}
+                                                </div>
+                                            )}
+                                            {/* Sarvam AI Analysis */}
+                                            {defectAnalysis.analysis?.report && (
+                                                <div style={{ padding: 12, background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+                                                    <div style={{ fontSize: '0.72rem', color: 'var(--accent-purple)', fontWeight: 700, marginBottom: 6 }}>🤖 Sarvam AI Analysis</div>
+                                                    <div className="analysis-text" dangerouslySetInnerHTML={{ __html: defectAnalysis.analysis.report.replace(/\n/g, '<br/>') }} />
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Image Upload + ViT Attention Map + Distribution */}
                         <div className="grid-full">
                             <ImageUpload />
                         </div>
                         <div className="grid-bottom">
-                            <AttentionMap panel={panels.find(p => p.defect !== 'normal' && p.defect !== 'Clean') || panels[0]} />
+                            <AttentionMap panel={selectedHeatmapPanel || panels.find(p => p.defect !== 'normal' && p.defect !== 'Clean') || panels[0]} />
                             <DefectDistribution panels={panels} />
                         </div>
                     </>
@@ -457,11 +590,11 @@ function App() {
                             <ImageUpload />
                         </div>
                         <div className="grid-main">
-                            <PanelHeatmap panels={panels} onPanelClick={handlePanelClick} />
                             <RecommendationQueue recommendations={recommendations} onItemClick={(rec) => {
                                 const panel = panels.find(p => p.id === rec.panel_id)
                                 if (panel) handlePanelClick(panel)
                             }} />
+                            <DefectDistribution panels={panels} />
                         </div>
                         <div className="grid-bottom">
                             <EnergyImpact panels={panels} kpis={siteData?.kpis} />
@@ -469,11 +602,7 @@ function App() {
                         </div>
                         <div className="grid-bottom">
                             <KPIMetrics kpis={siteData?.kpis} />
-                            <DefectDistribution panels={panels} />
-                        </div>
-                        <div className="grid-bottom">
                             <ProgressionChart panels={panels} />
-                            <AttentionMap panel={panels.find(p => p.defect !== 'normal' && p.defect !== 'Clean') || panels[0]} />
                         </div>
                         <div className="grid-full">
                             <WeatherWidget forecast={weather} />

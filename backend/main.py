@@ -10,6 +10,7 @@ import random
 import asyncio
 from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
+from fastapi.staticfiles import StaticFiles  # type: ignore
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from datetime import datetime
@@ -18,6 +19,7 @@ from data.simulator import (
     generate_site_data, generate_telemetry,
     generate_defect_history, generate_progression_forecast,
     generate_weather_forecast, ZONES, DEFECT_TYPES,
+    assign_panel_image, DEFECT_TO_DATASET_CLASS,
 )
 from engine.recommendation import generate_recommendations, calculate_cps
 from engine.forecasting import forecast_progression, generate_panel_history
@@ -87,25 +89,27 @@ def _pick_dataset_image(defect_class: str) -> Optional[str]:
 
 
 def _update_panel_defect(panel: Dict[str, Any], defect_class: str, severity: float) -> Dict[str, Any]:
-    """Update a panel's defect state and return classification result."""
-    # Map dataset class names back to simulator's internal names for compatibility
+    """Update a panel's defect state, assign a new image, and return classification result."""
     panel["defect"] = defect_class
     panel["severity"] = severity
     panel["confidence"] = 0.95
     panel["status"] = "healthy" if defect_class == "Clean" else ("critical" if severity > 0.7 else "warning")
     panel["last_inspection"] = datetime.now().strftime("%Y-%m-%d")
 
-    # Try to run real ViT classification on a dataset image
+    # Assign a new real image from the dataset for this defect type
+    assign_panel_image(panel)
+
+    # Try to run real ViT classification on the assigned image
     classification_result: Dict[str, Any] = {"mode": "manual", "predicted_class": defect_class}
-    image_path = _pick_dataset_image(defect_class)
-    if image_path:
-        try:
-            result = classify_image(image_path)
-            classification_result = result
-            # Update panel confidence from real model
-            panel["confidence"] = round(result.get("confidence", 0.95), 3)
-        except Exception as e:
-            classification_result["error"] = str(e)
+    if panel.get("image_path"):
+        full_path = os.path.join(DATASET_DIR, panel["image_path"])
+        if os.path.isfile(full_path):
+            try:
+                result = classify_image(full_path)
+                classification_result = result
+                panel["confidence"] = round(result.get("confidence", 0.95), 3)
+            except Exception as e:
+                classification_result["error"] = str(e)
 
     return classification_result
 
@@ -152,7 +156,9 @@ async def lifespan(app: Any) -> AsyncGenerator[None, None]:
     global SITE_DATA
     SITE_DATA = generate_site_data()
     panels: List[Any] = SITE_DATA["panels"]
-    print(f"SolarMind AI Backend initialized with {len(panels)} panels")
+    # Count panels with assigned images
+    with_images = sum(1 for p in panels if p.get("image_url"))
+    print(f"SolarMind AI Backend initialized with {len(panels)} panels ({with_images} with real images)")
     print(f"Dataset available: {os.path.isdir(DATASET_DIR)}")
     yield
     print("SolarMind AI Backend shutting down")
@@ -164,6 +170,10 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+# Serve dataset images as static files
+if os.path.isdir(DATASET_DIR):
+    app.mount("/images", StaticFiles(directory=DATASET_DIR), name="images")
 
 # CORS for frontend
 app.add_middleware(
@@ -402,6 +412,49 @@ async def analyze_image(file: UploadFile = File(...)) -> Dict[str, Any]:
         "classification": classification,
         "analysis": analysis,
         "filename": filename,
+        "file_size_bytes": len(content),
+    }
+
+
+@app.get("/api/panels/{panel_id}/analyze")
+async def analyze_panel(panel_id: str) -> Dict[str, Any]:
+    """
+    Analyze a panel's assigned dataset image using the same pipeline
+    as image upload: ViT classification + Sarvam AI analysis.
+    """
+    panel = _find_panel(panel_id)
+    image_rel = panel.get("image_path", "")
+    if not image_rel:
+        raise HTTPException(status_code=400, detail=f"Panel {panel_id} has no assigned image")
+
+    full_path = os.path.join(DATASET_DIR, image_rel)
+    if not os.path.isfile(full_path):
+        raise HTTPException(status_code=404, detail=f"Image file not found: {image_rel}")
+
+    # Read the image file
+    with open(full_path, "rb") as f:
+        content = f.read()
+
+    filename = os.path.basename(full_path)
+
+    # Classify using same pipeline as image upload
+    classification: Dict[str, Any] = classify_image_bytes(content, filename)
+
+    # Generate AI analysis via Sarvam AI
+    predicted_class = str(classification["predicted_class"])
+    confidence = float(classification["confidence"])
+    probabilities = classification.get("probabilities", {})
+
+    analysis: Dict[str, Any] = generate_analysis(
+        predicted_class, confidence, probabilities
+    )
+
+    return {
+        "panel_id": panel_id,
+        "classification": classification,
+        "analysis": analysis,
+        "filename": filename,
+        "image_url": panel.get("image_url", ""),
         "file_size_bytes": len(content),
     }
 

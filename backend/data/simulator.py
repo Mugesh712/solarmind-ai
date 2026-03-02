@@ -30,6 +30,59 @@ ACTIONS = {
 
 ZONES = ["Zone A", "Zone B", "Zone C", "Zone D", "Zone E"]
 
+# Map simulator defect names → Kaggle dataset folder names
+DEFECT_TO_DATASET_CLASS: Dict[str, str] = {
+    "normal": "Clean",
+    "Clean": "Clean",
+    "micro_crack": "Physical-Damage",
+    "hotspot": "Electrical-damage",
+    "dust_soiling": "Dusty",
+    "Bird-drop": "Bird-drop",
+    "Dusty": "Dusty",
+    "Electrical-damage": "Electrical-damage",
+    "Physical-Damage": "Physical-Damage",
+    "Snow-Covered": "Snow-Covered",
+}
+
+# Cache of available images per class
+_IMAGE_CACHE: Dict[str, List[str]] = {}
+DATASET_DIR: str = os.path.join(os.path.dirname(__file__), "pv_defect_dataset")
+
+
+def _get_images_for_class(dataset_class: str) -> List[str]:
+    """Get list of available images for a dataset class."""
+    if dataset_class in _IMAGE_CACHE:
+        return _IMAGE_CACHE[dataset_class]
+
+    images: List[str] = []
+    for split in ["train", "test", "val"]:
+        class_dir = os.path.join(DATASET_DIR, split, dataset_class)
+        if os.path.isdir(class_dir):
+            for f in os.listdir(class_dir):
+                if f.lower().endswith((".jpg", ".jpeg", ".png", ".bmp")):
+                    # Store as relative path: split/class/filename
+                    images.append(f"{split}/{dataset_class}/{f}")
+    _IMAGE_CACHE[dataset_class] = images
+    return images
+
+
+def assign_panel_image(panel: Dict[str, Any], rng: Optional[random.Random] = None) -> None:
+    """Assign a real dataset image to a panel based on its defect type."""
+    if rng is None:
+        rng = random.Random(_seed_for(panel["id"]))
+
+    defect = panel.get("defect", "normal")
+    dataset_class = DEFECT_TO_DATASET_CLASS.get(defect, "Clean")
+    images = _get_images_for_class(dataset_class)
+
+    if images:
+        chosen = rng.choice(images)
+        panel["image_path"] = chosen
+        panel["image_url"] = f"/images/{chosen}"
+    else:
+        panel["image_path"] = ""
+        panel["image_url"] = ""
+
 
 # ──────────────────────────────────────────────
 # Load real evaluation results
@@ -130,7 +183,11 @@ def generate_panels(count: int = 200) -> List[Dict[str, Any]]:
             "rul_days": _calculate_rul(defect, severity, rng),
             "last_inspection": (datetime.now() - timedelta(days=rng.randint(1, 30))).strftime("%Y-%m-%d"),
             "status": "healthy" if defect == "normal" else ("critical" if severity > 0.7 else "warning"),
+            "image_path": "",
+            "image_url": "",
         }
+        # Assign a real dataset image
+        assign_panel_image(panel, rng)
         panels.append(panel)
 
     return panels

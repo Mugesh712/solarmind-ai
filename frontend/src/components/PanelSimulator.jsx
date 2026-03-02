@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState } from 'react'
 
 const API_BASE = 'http://localhost:8000'
 const DEFECT_CLASSES = ['Clean', 'Bird-drop', 'Dusty', 'Electrical-damage', 'Physical-Damage', 'Snow-Covered']
@@ -24,7 +24,7 @@ const DEFECT_ICONS = {
     'Snow-Covered': '❄️',
 }
 
-export default function PanelSimulator({ panels = [], onPanelsChanged }) {
+export default function PanelSimulator({ panels = [] }) {
     const [selectedPanel, setSelectedPanel] = useState(null)
     const [selectedDefect, setSelectedDefect] = useState('Clean')
     const [severity, setSeverity] = useState(0.5)
@@ -32,11 +32,13 @@ export default function PanelSimulator({ panels = [], onPanelsChanged }) {
     const [activityLog, setActivityLog] = useState([])
     const [lastResult, setLastResult] = useState(null)
     const [eventLoading, setEventLoading] = useState('')
+    const [imageError, setImageError] = useState(false)
 
     const applyDefect = async () => {
         if (!selectedPanel) return
         setLoading(true)
         setLastResult(null)
+        setImageError(false)
         try {
             const res = await fetch(
                 `${API_BASE}/api/simulate/panel/${selectedPanel.id}?defect=${encodeURIComponent(selectedDefect)}&severity=${severity}`,
@@ -44,6 +46,10 @@ export default function PanelSimulator({ panels = [], onPanelsChanged }) {
             )
             const data = await res.json()
             setLastResult(data.classification)
+            // Update selected panel with new data from response
+            if (data.panel) {
+                setSelectedPanel(data.panel)
+            }
             setActivityLog(prev => [{
                 time: new Date().toLocaleTimeString(),
                 panel: selectedPanel.id,
@@ -66,6 +72,11 @@ export default function PanelSimulator({ panels = [], onPanelsChanged }) {
                 { method: 'POST' }
             )
             const data = await res.json()
+            // If selected panel was affected, refresh it
+            if (selectedPanel && data.affected_panels?.includes(selectedPanel.id)) {
+                const updated = panels.find(p => p.id === selectedPanel.id)
+                if (updated) setSelectedPanel(updated)
+            }
             setActivityLog(prev => [{
                 time: new Date().toLocaleTimeString(),
                 panel: `${data.affected_count} panels`,
@@ -80,8 +91,12 @@ export default function PanelSimulator({ panels = [], onPanelsChanged }) {
         }
     }
 
-    const getDefectColor = (panel) => {
-        return DEFECT_COLORS[panel.defect] || '#10b981'
+    const getDefectColor = (panel) => DEFECT_COLORS[panel.defect] || '#10b981'
+
+    // Build the image URL for a panel
+    const getPanelImageUrl = (panel) => {
+        if (!panel?.image_url) return null
+        return `${API_BASE}${panel.image_url}`
     }
 
     return (
@@ -102,6 +117,8 @@ export default function PanelSimulator({ panels = [], onPanelsChanged }) {
                                 setSelectedPanel(panel)
                                 setSelectedDefect(panel.defect === 'normal' ? 'Clean' : (DEFECT_CLASSES.includes(panel.defect) ? panel.defect : 'Clean'))
                                 setSeverity(panel.severity || 0.5)
+                                setImageError(false)
+                                setLastResult(null)
                             }}
                             title={`${panel.id} — ${panel.defect} (${panel.severity})`}
                         />
@@ -119,7 +136,7 @@ export default function PanelSimulator({ panels = [], onPanelsChanged }) {
 
             {/* Controls Panel */}
             <div className="simulator-controls">
-                {/* Selected Panel Info */}
+                {/* Selected Panel Info + Photo */}
                 <div className="card">
                     <div className="card-header">
                         <span className="card-title">Selected Panel</span>
@@ -138,6 +155,26 @@ export default function PanelSimulator({ panels = [], onPanelsChanged }) {
                                     Severity: {selectedPanel.severity?.toFixed(2) || '0.00'}
                                 </span>
                             </div>
+                            {/* Real Panel Photo */}
+                            {getPanelImageUrl(selectedPanel) && (
+                                <div className="panel-photo-container">
+                                    {!imageError ? (
+                                        <img
+                                            src={getPanelImageUrl(selectedPanel)}
+                                            alt={`${selectedPanel.id} — ${selectedPanel.defect}`}
+                                            className="panel-photo"
+                                            onError={() => setImageError(true)}
+                                        />
+                                    ) : (
+                                        <div className="panel-photo-placeholder">
+                                            📷 Image not available
+                                        </div>
+                                    )}
+                                    <div className="panel-photo-label">
+                                        📷 Real dataset image — {selectedPanel.defect}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     ) : (
                         <div className="sim-panel-empty">
@@ -223,35 +260,19 @@ export default function PanelSimulator({ panels = [], onPanelsChanged }) {
                         <span className="card-title">⚡ Quick Actions</span>
                     </div>
                     <div className="quick-actions">
-                        <button
-                            className="event-btn dust"
-                            onClick={() => triggerEvent('dust_storm')}
-                            disabled={!!eventLoading}
-                        >
+                        <button className="event-btn dust" onClick={() => triggerEvent('dust_storm')} disabled={!!eventLoading}>
                             {eventLoading === 'dust_storm' ? '⏳' : '☁️'} Dust Storm
                             <span className="event-desc">~10 panels get dusty</span>
                         </button>
-                        <button
-                            className="event-btn bird"
-                            onClick={() => triggerEvent('bird_event')}
-                            disabled={!!eventLoading}
-                        >
+                        <button className="event-btn bird" onClick={() => triggerEvent('bird_event')} disabled={!!eventLoading}>
                             {eventLoading === 'bird_event' ? '⏳' : '🐦'} Bird Event
                             <span className="event-desc">~3 panels get bird-drops</span>
                         </button>
-                        <button
-                            className="event-btn clean"
-                            onClick={() => triggerEvent('maintenance')}
-                            disabled={!!eventLoading}
-                        >
+                        <button className="event-btn clean" onClick={() => triggerEvent('maintenance')} disabled={!!eventLoading}>
                             {eventLoading === 'maintenance' ? '⏳' : '🧹'} Maintenance
                             <span className="event-desc">Clean all dusty panels</span>
                         </button>
-                        <button
-                            className="event-btn reset"
-                            onClick={() => triggerEvent('reset')}
-                            disabled={!!eventLoading}
-                        >
+                        <button className="event-btn reset" onClick={() => triggerEvent('reset')} disabled={!!eventLoading}>
                             {eventLoading === 'reset' ? '⏳' : '🔄'} Reset All
                             <span className="event-desc">All panels → Clean</span>
                         </button>
