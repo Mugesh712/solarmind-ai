@@ -421,10 +421,19 @@ function App() {
                                                 </div>
                                             )}
                                             {/* Sarvam AI Analysis */}
-                                            {defectAnalysis.analysis?.report && (
+                                            {defectAnalysis.analysis?.analysis && (
                                                 <div style={{ padding: 12, background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
-                                                    <div style={{ fontSize: '0.72rem', color: 'var(--accent-purple)', fontWeight: 700, marginBottom: 6 }}>🤖 Sarvam AI Analysis</div>
-                                                    <div className="analysis-text" dangerouslySetInnerHTML={{ __html: defectAnalysis.analysis.report.replace(/\n/g, '<br/>') }} />
+                                                    <div style={{ fontSize: '0.72rem', color: 'var(--accent-purple)', fontWeight: 700, marginBottom: 6 }}>
+                                                        {defectAnalysis.analysis?.source === 'sarvam-ai' ? '🧠 Sarvam AI Analysis' : '📋 Analysis Report'}
+                                                    </div>
+                                                    <div className="analysis-text">
+                                                        {defectAnalysis.analysis.analysis.split('\n').map((line, i) => (
+                                                            <p key={i}>{line}</p>
+                                                        ))}
+                                                    </div>
+                                                    <span className="analysis-source">
+                                                        Source: {defectAnalysis.analysis?.source === 'sarvam-ai' ? 'Sarvam AI (sarvam-m)' : 'Built-in Template'}
+                                                    </span>
                                                 </div>
                                             )}
                                         </div>
