@@ -2,14 +2,15 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import Sidebar from './components/Sidebar'
 import SiteOverview from './components/SiteOverview'
 import PanelHeatmap from './components/PanelHeatmap'
-import KPIMetrics from './components/KPIMetrics'
+
 import ZoneHealth from './components/ZoneHealth'
 import DefectDistribution from './components/DefectDistribution'
-import WeatherWidget from './components/WeatherWidget'
-import ProgressionChart from './components/ProgressionChart'
+
 import AttentionMap from './components/AttentionMap'
 import PanelDetail from './components/PanelDetail'
 import ImageUpload from './components/ImageUpload'
+import VideoUpload from './components/VideoUpload'
+import ModelComparison from './components/ModelComparison'
 import PanelSimulator from './components/PanelSimulator'
 
 const API_BASE = 'http://localhost:8000'
@@ -19,7 +20,7 @@ function App() {
     const [siteData, setSiteData] = useState(null)
     const [panels, setPanels] = useState([])
     const [recommendations, setRecommendations] = useState([])
-    const [weather, setWeather] = useState([])
+
     const [selectedPanel, setSelectedPanel] = useState(null)
     const [activePage, setActivePage] = useState('dashboard')
     const [loading, setLoading] = useState(true)
@@ -127,22 +128,19 @@ function App() {
 
     const fetchData = async () => {
         try {
-            const [siteRes, panelsRes, recsRes, weatherRes] = await Promise.all([
+            const [siteRes, panelsRes, recsRes] = await Promise.all([
                 fetch(`${API_BASE}/api/site`),
                 fetch(`${API_BASE}/api/panels`),
                 fetch(`${API_BASE}/api/recommendations?limit=30`),
-                fetch(`${API_BASE}/api/weather`),
             ])
 
             const site = await siteRes.json()
             const panelData = await panelsRes.json()
             const recData = await recsRes.json()
-            const weatherData = await weatherRes.json()
 
             setSiteData(site)
             setPanels(panelData.panels)
             setRecommendations(recData.recommendations)
-            setWeather(weatherData.forecast)
             setApiConnected(true)
         } catch (err) {
             console.log('API not available, using fallback data')
@@ -226,18 +224,6 @@ function App() {
             .sort((a, b) => b.cps - a.cps)
         setRecommendations(recs)
 
-        const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-        const wf = Array.from({ length: 7 }, (_, i) => {
-            const d = new Date(); d.setDate(d.getDate() + i)
-            return {
-                date: d.toISOString().slice(0, 10),
-                day_name: dayNames[d.getDay()],
-                temp_high_c: +(Math.random() * 12 + 30).toFixed(1),
-                rain_probability: +(Math.random() * 0.4).toFixed(2),
-                irradiance_forecast_w_m2: Math.round(Math.random() * 350 + 600),
-            }
-        })
-        setWeather(wf)
         setApiConnected(false)
     }
 
@@ -292,12 +278,8 @@ function App() {
         dashboard: '☀️ Solar Twin Dashboard',
         panels: '🔲 Panel Map',
         defects: '🔍 Defect Detection & Analysis',
-        recommendations: '🛠️ Maintenance Recommendations',
-        forecasting: '📈 Defect Forecasting',
         simulator: '🎛️ Panel Simulator',
-        federation: '🌐 Federated Learning',
-        model: '🤖 AI Model Info',
-        settings: '⚙️ Settings',
+        comparison: '📊 Model Architecture Comparison',
     }
 
     const renderPage = () => {
@@ -427,21 +409,10 @@ function App() {
 
                         {/* ViT Attention Map — only after analysis */}
                         {defectAnalysis && (
-                            <div className="grid-bottom">
+                            <div className="grid-full">
                                 <AttentionMap panel={selectedHeatmapPanel || panels[0]} />
                             </div>
                         )}
-                    </>
-                )
-            case 'forecasting':
-                return (
-                    <>
-                        <div className="grid-full">
-                            <ProgressionChart panels={panels} />
-                        </div>
-                        <div className="grid-full">
-                            <WeatherWidget forecast={weather} />
-                        </div>
                     </>
                 )
             case 'simulator':
@@ -450,108 +421,10 @@ function App() {
                         <PanelSimulator panels={panels} onPanelsChanged={fetchData} />
                     </div>
                 )
-            case 'federation':
+            case 'comparison':
                 return (
                     <div className="grid-full">
-                        <div className="card" style={{ textAlign: 'center', padding: '60px 40px' }}>
-                            <div style={{ fontSize: '3rem', marginBottom: 16 }}>🌐</div>
-                            <h3 style={{ marginBottom: 8 }}>Federated Learning Hub</h3>
-                            <p style={{ color: 'var(--text-secondary)', maxWidth: 500, margin: '0 auto' }}>
-                                Distributed model training across multiple solar farm edge nodes. Models are trained locally and aggregated centrally — no raw data leaves the site.
-                            </p>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 24, maxWidth: 400, margin: '24px auto 0' }}>
-                                <div className="card" style={{ padding: 16, textAlign: 'center' }}>
-                                    <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--accent-green)' }}>5</div>
-                                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Active Nodes</div>
-                                </div>
-                                <div className="card" style={{ padding: 16, textAlign: 'center' }}>
-                                    <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--accent-blue)' }}>98.2%</div>
-                                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Sync Rate</div>
-                                </div>
-                                <div className="card" style={{ padding: 16, textAlign: 'center' }}>
-                                    <div style={{ fontSize: '1.5rem', fontWeight: 800, color: 'var(--accent-cyan)' }}>v2.1</div>
-                                    <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>Model Ver.</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                )
-            case 'model':
-                return (
-                    <div className="grid-full">
-                        <div className="card" style={{ padding: 28 }}>
-                            <h3 style={{ marginBottom: 16 }}>🤖 AI Model Architecture</h3>
-                            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-                                <div className="card" style={{ padding: 20 }}>
-                                    <h4 style={{ color: 'var(--accent-blue)', marginBottom: 12 }}>ViT-Base/16 Classifier</h4>
-                                    <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.8 }}>
-                                        <div>• Architecture: Vision Transformer (ViT-Base/16)</div>
-                                        <div>• Parameters: 86M</div>
-                                        <div>• Input: 224×224 RGB images</div>
-                                        <div>• Classes: Bird-drop, Clean, Dusty, Electrical-damage, Physical-Damage, Snow-Covered</div>
-                                        <div>• Dataset: <a href="https://www.kaggle.com/datasets/alicjalena/pv-panel-defect-dataset" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-blue)' }}>PV Panel Defect Dataset</a></div>
-                                        <div>• Inference: ~23ms (edge), ~8ms (cloud)</div>
-                                    </div>
-                                </div>
-                                <div className="card" style={{ padding: 20 }}>
-                                    <h4 style={{ color: 'var(--accent-purple)', marginBottom: 12 }}>Sarvam AI Analysis</h4>
-                                    <div style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', lineHeight: 1.8 }}>
-                                        <div>• Model: sarvam-m (24B parameters)</div>
-                                        <div>• Task: Maintenance report generation</div>
-                                        <div>• Input: Classification results + panel metadata</div>
-                                        <div>• Output: Diagnosis, severity, action plan</div>
-                                        <div>• Languages: English + Indian languages</div>
-                                        <div>• API: <a href="https://sarvam.ai" target="_blank" rel="noreferrer" style={{ color: 'var(--accent-purple)' }}>sarvam.ai</a></div>
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="card" style={{ padding: 20, marginTop: 16 }}>
-                                <h4 style={{ color: 'var(--accent-green)', marginBottom: 12 }}>Performance Metrics</h4>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12 }}>
-                                    {[
-                                        { label: 'Precision', value: siteData?.kpis?.precision || 0.962, color: 'var(--accent-green)' },
-                                        { label: 'Recall', value: siteData?.kpis?.recall || 0.938, color: 'var(--accent-blue)' },
-                                        { label: 'F1 Score', value: siteData?.kpis?.f1_score || 0.950, color: 'var(--accent-cyan)' },
-                                        { label: 'mAP', value: siteData?.kpis?.mAP || 0.891, color: 'var(--accent-yellow)' },
-                                    ].map(m => (
-                                        <div key={m.label} style={{ textAlign: 'center', padding: 12, background: 'var(--bg-elevated)', borderRadius: 'var(--radius-sm)' }}>
-                                            <div style={{ fontSize: '1.5rem', fontWeight: 800, color: m.color }}>{(m.value * 100).toFixed(1)}%</div>
-                                            <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: 4 }}>{m.label}</div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                )
-            case 'settings':
-                return (
-                    <div className="grid-full">
-                        <div className="card" style={{ textAlign: 'center', padding: '60px 40px' }}>
-                            <div style={{ fontSize: '3rem', marginBottom: 16 }}>⚙️</div>
-                            <h3 style={{ marginBottom: 8 }}>System Settings</h3>
-                            <p style={{ color: 'var(--text-secondary)', maxWidth: 500, margin: '0 auto' }}>
-                                Configure alert thresholds, API keys, edge node settings, and notification preferences.
-                            </p>
-                            <div style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 400, margin: '24px auto 0' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-sm)' }}>
-                                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Backend API</span>
-                                    <span style={{ color: apiConnected ? 'var(--accent-green)' : 'var(--accent-red)', fontSize: '0.85rem', fontWeight: 600 }}>{apiConnected ? 'Connected' : 'Disconnected'}</span>
-                                </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-sm)' }}>
-                                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>WebSocket</span>
-                                    <span style={{ color: wsConnected ? 'var(--accent-green)' : 'var(--accent-red)', fontSize: '0.85rem', fontWeight: 600 }}>{wsConnected ? 'Live' : 'Disconnected'}</span>
-                                </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-sm)' }}>
-                                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Total Panels</span>
-                                    <span style={{ color: 'var(--text-primary)', fontSize: '0.85rem', fontWeight: 600 }}>{panels.length}</span>
-                                </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 16px', background: 'var(--bg-elevated)', borderRadius: 'var(--radius-sm)' }}>
-                                    <span style={{ color: 'var(--text-secondary)', fontSize: '0.85rem' }}>Sarvam AI</span>
-                                    <span style={{ color: 'var(--accent-yellow)', fontSize: '0.85rem', fontWeight: 600 }}>Set SARVAM_API_KEY</span>
-                                </div>
-                            </div>
-                        </div>
+                        <ModelComparison />
                     </div>
                 )
             default: // dashboard
@@ -563,13 +436,14 @@ function App() {
                         <div className="grid-full">
                             <ImageUpload />
                         </div>
-                        <div className="grid-main">
-                            <DefectDistribution panels={panels} />
-                            <KPIMetrics kpis={siteData?.kpis} />
+                        <div className="grid-full">
+                            <VideoUpload />
                         </div>
-                        <div className="grid-bottom">
+                        <div className="grid-full">
+                            <DefectDistribution panels={panels} />
+                        </div>
+                        <div className="grid-full">
                             <ZoneHealth zones={siteData?.zone_health} />
-                            <WeatherWidget forecast={weather} />
                         </div>
                     </>
                 )

@@ -2,11 +2,11 @@ import SiteOverview from '../components/SiteOverview'
 import PanelHeatmap from '../components/PanelHeatmap'
 import RecommendationQueue from '../components/RecommendationQueue'
 import EnergyImpact from '../components/EnergyImpact'
-import KPIMetrics from '../components/KPIMetrics'
+
 import ZoneHealth from '../components/ZoneHealth'
 import DefectDistribution from '../components/DefectDistribution'
 import WeatherWidget from '../components/WeatherWidget'
-import ProgressionChart from '../components/ProgressionChart'
+
 import AttentionMap from '../components/AttentionMap'
 import ImageUpload from '../components/ImageUpload'
 
@@ -44,15 +44,13 @@ export default function Dashboard({
                 <ZoneHealth zones={siteData?.zone_health} />
             </div>
 
-            {/* KPI + Defect Distribution */}
-            <div className="grid-bottom">
-                <KPIMetrics kpis={siteData?.kpis} />
+            {/* Defect Distribution */}
+            <div className="grid-full">
                 <DefectDistribution panels={panels} />
             </div>
 
-            {/* Progression + Attention Map */}
-            <div className="grid-bottom">
-                <ProgressionChart panels={panels} />
+            {/* Attention Map */}
+            <div className="grid-full">
                 <AttentionMap panel={faultyPanel} />
             </div>
 

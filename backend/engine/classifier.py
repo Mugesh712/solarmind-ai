@@ -2,6 +2,7 @@
 SolarMind AI — Image Classifier
 Classifies solar panel images using a pre-trained CNN model.
 Falls back to simulated classification when model/dependencies unavailable.
+Includes validation to reject non-solar-panel images.
 
 Dataset: PV Panel Defect Dataset (Kaggle)
 https://www.kaggle.com/datasets/alicjalena/pv-panel-defect-dataset
@@ -75,21 +76,201 @@ def get_dataset_info() -> Dict[str, Any]:
     }
 
 
+# ──────────────────────────────────────────────
+# Solar Panel Validation
+# ──────────────────────────────────────────────
+
+# Confidence threshold: if the model's max softmax probability is below this,
+# the image is likely out-of-domain (not a solar panel).
+CONFIDENCE_THRESHOLD: float = 0.55
+
+# Entropy threshold: if the probability distribution entropy is above this,
+# the model is confused — likely a non-solar-panel image.
+# Max entropy for 6 classes = ln(6) ≈ 1.79; threshold ~85% of max.
+ENTROPY_THRESHOLD: float = 1.55
+
+
+def _calc_entropy(probs: List[float]) -> float:
+    """Calculate Shannon entropy of a probability distribution."""
+    entropy: float = 0.0
+    for p in probs:
+        if p > 1e-9:
+            entropy -= p * math.log(p)
+    return entropy
+
+
+def _check_is_solar_panel_confidence(probs_dict: Dict[str, float], max_confidence: float) -> bool:
+    """
+    Check if the ViT model classification looks like a solar panel.
+    Returns False if the model appears confused (out-of-domain image).
+    """
+    # Check 1: Max confidence too low
+    if max_confidence < CONFIDENCE_THRESHOLD:
+        return False
+
+    # Check 2: High entropy (uniform distribution = model confused)
+    probs_list: List[float] = list(probs_dict.values())
+    entropy: float = _calc_entropy(probs_list)
+    if entropy > ENTROPY_THRESHOLD:
+        return False
+
+    return True
+
+
+def _pixel_is_solar_panel(image_path: str) -> bool:
+    """
+    Heuristic check using pixel analysis to determine if an image
+    contains a solar panel. Solar panels are typically:
+    - Dark (low-to-medium brightness)
+    - Blue/grey/black dominant colors (low saturation, slight blue tint)
+    - Have grid-like edge patterns
+    - NOT pure greyscale (X-rays, documents, etc.)
+
+    Returns False if the image does not look like a solar panel.
+    """
+    try:
+        from PIL import Image, ImageFilter, ImageStat  # type: ignore
+    except ImportError:
+        return True  # Can't check, assume it's a panel
+
+    try:
+        img = Image.open(image_path).convert("RGB")
+        img_resized = img.resize((224, 224))
+
+        stat = ImageStat.Stat(img_resized)
+        r_mean: float = stat.mean[0]
+        g_mean: float = stat.mean[1]
+        b_mean: float = stat.mean[2]
+        r_std: float = stat.stddev[0]
+        g_std: float = stat.stddev[1]
+        b_std: float = stat.stddev[2]
+
+        brightness: float = (r_mean + g_mean + b_mean) / 3.0 / 255.0
+
+        # Saturation: how colorful vs grey
+        max_c: float = max(r_mean, g_mean, b_mean)
+        min_c: float = min(r_mean, g_mean, b_mean)
+        saturation: float = 0.0
+        if max_c > 0:
+            saturation = (max_c - min_c) / max_c
+
+        # Edge intensity — solar panels have moderate, regular edges
+        grey = img_resized.convert("L")
+        edges = grey.filter(ImageFilter.FIND_EDGES)
+        edge_stat = ImageStat.Stat(edges)
+        edge_mean: float = edge_stat.mean[0] / 255.0
+
+        # Greyscale detection: check if the image is a true greyscale image
+        # converted to RGB (X-ray, medical scan, document scan, etc.).
+        # In such images, R==G==B for nearly every pixel.
+        # Dusty solar panels have low saturation overall but still show
+        # per-pixel color variation from the panel surface.
+        import numpy as np  # type: ignore
+        pixels = np.array(img_resized)
+        per_pixel_spread = np.max(pixels, axis=2).astype(float) - np.min(pixels, axis=2).astype(float)
+        # Pixels with spread <= 3 are effectively greyscale
+        grey_pixel_ratio: float = float(np.mean(per_pixel_spread <= 3))
+        is_greyscale: bool = grey_pixel_ratio > 0.80
+
+        # Brightness variance: X-rays and medical images often have very high
+        # brightness standard deviation (bright structures on dark background).
+        avg_brightness_std: float = (r_std + g_std + b_std) / 3.0
+        high_brightness_variance: bool = avg_brightness_std > 70.0
+
+        # Immediate rejection: pure greyscale images are NOT solar panels.
+        # Solar panels always have some color (blue cells, silver frames).
+        if is_greyscale:
+            return False
+
+        # Scoring: accumulate "solar panel likelihood" points
+        fail_reasons: int = 0
+
+        # Solar panels are generally dark to medium brightness (0.05 – 0.60)
+        if brightness > 0.75:
+            fail_reasons += 1  # Very bright (e.g. white wall, sky, snow scene)
+
+        # Solar panels have low saturation (blue-grey-black) but NOT zero
+        if saturation > 0.55:
+            fail_reasons += 1  # Very colorful (e.g. flowers, people, food)
+
+        # Solar panels have moderate edge intensity (grid lines)
+        if edge_mean < 0.02:
+            fail_reasons += 1  # Almost no edges (e.g. solid color, blank wall)
+        elif edge_mean > 0.35:
+            fail_reasons += 1  # Extremely noisy edges (e.g. dense foliage, text)
+
+        # Blue dominance check: solar cells are typically blue-ish
+        # Allow grey/black (all channels similar) or blue-dominant
+        channel_spread: float = max_c - min_c
+        if channel_spread > 60 and b_mean < r_mean and b_mean < g_mean:
+            # Strong non-blue color (warm reds, greens without blue)
+            fail_reasons += 1
+
+        # High brightness variance with low saturation = medical/X-ray type image
+        if high_brightness_variance and saturation < 0.12:
+            fail_reasons += 1
+
+        # Decision: if 2+ heuristic checks fail, likely not a solar panel
+        if fail_reasons >= 2:
+            return False
+
+        return True
+
+    except Exception:
+        return True  # On error, don't block — assume it's a panel
+
+
+def _not_solar_panel_result(image_path: str, mode: str) -> Dict[str, Any]:
+    """Return a standardized 'not a solar panel' result."""
+    return {
+        "predicted_class": "Not a Solar Panel",
+        "confidence": 0.0,
+        "probabilities": {},
+        "model_type": "Solar Panel Validation",
+        "image_path": image_path,
+        "mode": mode,
+        "is_solar_panel": False,
+        "message": (
+            "The uploaded image does not appear to contain a solar panel. "
+            "Please upload a clear photo of a solar panel for defect analysis."
+        ),
+    }
+
+
 def classify_image(image_path: str) -> Dict[str, Any]:
     """
     Classify a solar panel image for defects.
 
     If PyTorch + trained model are available, uses the real model.
     Otherwise, uses image pixel analysis for classification.
+    Validates that the image actually contains a solar panel first.
     """
     if _has_torch() and _has_pil() and os.path.isfile(MODEL_PATH):
         result: Dict[str, Any] = _real_classify(image_path)
+        # Validate using model confidence + entropy
+        is_panel: bool = _check_is_solar_panel_confidence(
+            result.get("probabilities", {}), float(result.get("confidence", 0))
+        )
+        if not is_panel:
+            return _not_solar_panel_result(image_path, "real")
+        # Also apply pixel heuristic as secondary gate — catches images
+        # that fool the model (e.g. X-rays, medical scans, dark photos)
+        if not _pixel_is_solar_panel(image_path):
+            return _not_solar_panel_result(image_path, "real")
+        result["is_solar_panel"] = True
         return result
+
     # Use pixel-based analysis
     if _has_pil():
+        # First check if image looks like a solar panel
+        if not _pixel_is_solar_panel(image_path):
+            return _not_solar_panel_result(image_path, "analysis")
         result = _pixel_classify(image_path)
+        result["is_solar_panel"] = True
         return result
+
     result = _fallback_classify(image_path)
+    result["is_solar_panel"] = True
     return result
 
 

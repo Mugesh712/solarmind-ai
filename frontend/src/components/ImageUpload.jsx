@@ -165,67 +165,100 @@ export default function ImageUpload() {
             {/* Results */}
             {result && (
                 <div className="analysis-results">
-                    <div className="result-header">
-                        <div className="predicted-class">
-                            <span className="class-icon">{getClassIcon(result.classification?.predicted_class)}</span>
-                            <div>
-                                <h4>{result.classification?.predicted_class}</h4>
-                                <span className="confidence-badge">
-                                    {(result.classification?.confidence * 100).toFixed(1)}% confidence
+                    {/* Not a Solar Panel Warning */}
+                    {result.classification?.is_solar_panel === false ? (
+                        <div className="not-solar-panel-warning">
+                            <div className="warning-icon-large">🚫</div>
+                            <h4 style={{ color: '#f59e0b', margin: '12px 0 8px' }}>No Solar Panel Detected</h4>
+                            <p style={{ color: '#94a3b8', fontSize: '14px', lineHeight: '1.6', margin: '0 0 16px' }}>
+                                The uploaded image does not appear to contain a solar panel.
+                                Please upload a clear photo of a solar panel for accurate defect analysis.
+                            </p>
+                            <div style={{
+                                background: 'rgba(245, 158, 11, 0.1)',
+                                border: '1px solid rgba(245, 158, 11, 0.2)',
+                                borderRadius: '8px',
+                                padding: '12px 16px',
+                                fontSize: '13px',
+                                color: '#cbd5e1',
+                                textAlign: 'left',
+                            }}>
+                                <strong style={{ color: '#f59e0b' }}>💡 Tips for best results:</strong>
+                                <ul style={{ margin: '8px 0 0', paddingLeft: '20px', lineHeight: '1.8' }}>
+                                    <li>Use a close-up photo of the solar panel surface</li>
+                                    <li>Ensure the panel is clearly visible in the frame</li>
+                                    <li>Avoid photos of unrelated objects, people, or landscapes</li>
+                                </ul>
+                            </div>
+                            <button className="btn-reset" onClick={handleReset} style={{ marginTop: '16px', width: '100%' }}>
+                                🔄 Try Another Image
+                            </button>
+                        </div>
+                    ) : (
+                        <>
+                            <div className="result-header">
+                                <div className="predicted-class">
+                                    <span className="class-icon">{getClassIcon(result.classification?.predicted_class)}</span>
+                                    <div>
+                                        <h4>{result.classification?.predicted_class}</h4>
+                                        <span className="confidence-badge">
+                                            {(result.classification?.confidence * 100).toFixed(1)}% confidence
+                                        </span>
+                                    </div>
+                                </div>
+                                <span className={`mode-badge ${result.classification?.mode}`}>
+                                    {result.classification?.mode === 'real' ? '🤖 Real Model' : '🔮 Simulated'}
                                 </span>
                             </div>
-                        </div>
-                        <span className={`mode-badge ${result.classification?.mode}`}>
-                            {result.classification?.mode === 'real' ? '🤖 Real Model' : '🔮 Simulated'}
-                        </span>
-                    </div>
 
-                    {/* Probability Bars */}
-                    <div className="probability-bars">
-                        <h5>Class Probabilities</h5>
-                        {result.classification?.probabilities &&
-                            Object.entries(result.classification.probabilities)
-                                .sort(([, a], [, b]) => b - a)
-                                .map(([cls, prob]) => (
-                                    <div key={cls} className="prob-bar-row">
-                                        <span className="prob-label">
-                                            {getClassIcon(cls)} {cls}
-                                        </span>
-                                        <div className="prob-bar-track">
-                                            <div
-                                                className="prob-bar-fill"
-                                                style={{
-                                                    width: `${Math.max(1, prob * 100)}%`,
-                                                    backgroundColor:
-                                                        cls === result.classification.predicted_class
-                                                            ? '#3b82f6'
-                                                            : '#475569',
-                                                }}
-                                            ></div>
-                                        </div>
-                                        <span className="prob-value">{(prob * 100).toFixed(1)}%</span>
-                                    </div>
-                                ))}
-                    </div>
+                            {/* Probability Bars */}
+                            <div className="probability-bars">
+                                <h5>Class Probabilities</h5>
+                                {result.classification?.probabilities &&
+                                    Object.entries(result.classification.probabilities)
+                                        .sort(([, a], [, b]) => b - a)
+                                        .map(([cls, prob]) => (
+                                            <div key={cls} className="prob-bar-row">
+                                                <span className="prob-label">
+                                                    {getClassIcon(cls)} {cls}
+                                                </span>
+                                                <div className="prob-bar-track">
+                                                    <div
+                                                        className="prob-bar-fill"
+                                                        style={{
+                                                            width: `${Math.max(1, prob * 100)}%`,
+                                                            backgroundColor:
+                                                                cls === result.classification.predicted_class
+                                                                    ? '#3b82f6'
+                                                                    : '#475569',
+                                                        }}
+                                                    ></div>
+                                                </div>
+                                                <span className="prob-value">{(prob * 100).toFixed(1)}%</span>
+                                            </div>
+                                        ))}
+                            </div>
 
-                    {/* AI Analysis */}
-                    <div className="ai-analysis">
-                        <h5>
-                            {result.analysis?.source === 'sarvam-ai' ? '🧠 Sarvam AI Analysis' : '📋 Analysis Report'}
-                        </h5>
-                        <div className="analysis-text">
-                            {result.analysis?.analysis?.split('\n').map((line, i) => (
-                                <p key={i} dangerouslySetInnerHTML={{ __html: line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') }} />
-                            ))}
-                        </div>
-                        <span className="analysis-source">
-                            Source: {result.analysis?.source === 'sarvam-ai' ? 'Sarvam AI (sarvam-m)' : 'Built-in Template'}
-                        </span>
-                    </div>
+                            {/* AI Analysis */}
+                            <div className="ai-analysis">
+                                <h5>
+                                    {result.analysis?.source === 'sarvam-ai' ? '🧠 Sarvam AI Analysis' : '📋 Analysis Report'}
+                                </h5>
+                                <div className="analysis-text">
+                                    {result.analysis?.analysis?.split('\n').map((line, i) => (
+                                        <p key={i} dangerouslySetInnerHTML={{ __html: line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') }} />
+                                    ))}
+                                </div>
+                                <span className="analysis-source">
+                                    Source: {result.analysis?.source === 'sarvam-ai' ? 'Sarvam AI (sarvam-m)' : 'Built-in Template'}
+                                </span>
+                            </div>
 
-                    <button className="btn-reset" onClick={handleReset} style={{ marginTop: '16px', width: '100%' }}>
-                        🔄 Analyze Another Image
-                    </button>
+                            <button className="btn-reset" onClick={handleReset} style={{ marginTop: '16px', width: '100%' }}>
+                                🔄 Analyze Another Image
+                            </button>
+                        </>
+                    )}
                 </div>
             )}
         </div>

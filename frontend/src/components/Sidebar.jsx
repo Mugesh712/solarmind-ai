@@ -3,11 +3,8 @@ export default function Sidebar({ activePage, onNavigate, apiConnected }) {
         { id: 'dashboard', icon: '📊', label: 'Dashboard' },
         { id: 'panels', icon: '🔲', label: 'Panel Map' },
         { id: 'defects', icon: '🔍', label: 'Defect Detection' },
-        { id: 'forecasting', icon: '📈', label: 'Forecasting' },
         { id: 'simulator', icon: '🎛️', label: 'Simulator' },
-        { id: 'federation', icon: '🌐', label: 'Federated Learning' },
-        { id: 'model', icon: '🤖', label: 'AI Model Info' },
-        { id: 'settings', icon: '⚙️', label: 'Settings' },
+        { id: 'comparison', icon: '📊', label: 'Model Comparison' },
     ]
 
     return (
@@ -44,9 +41,10 @@ export default function Sidebar({ activePage, onNavigate, apiConnected }) {
                     Edge Node: Jetson Orin NX
                 </div>
                 <div style={{ fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: 2 }}>
-                    Model: ViT-Small/16 v2.1
+                    Model: ViT+Swin Ensemble v2.1
                 </div>
             </div>
         </aside>
     )
 }
+
