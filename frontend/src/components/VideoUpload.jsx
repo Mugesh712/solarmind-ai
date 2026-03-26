@@ -11,6 +11,7 @@ export default function VideoUpload() {
     const [error, setError] = useState(null);
     const [dragOver, setDragOver] = useState(false);
     const [expandedFrame, setExpandedFrame] = useState(null);
+    const [downloading, setDownloading] = useState(false);
     const fileRef = useRef(null);
 
     const handleFile = (f) => {
@@ -67,6 +68,43 @@ export default function VideoUpload() {
         }
     };
 
+    const handleDownloadReport = async (frameAnalysis, frameClassification, frameIndex) => {
+        setDownloading(true);
+        try {
+            const res = await fetch(`${API_URL}/api/report/download`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    report_title: frameAnalysis?.report_title || 'Solar Panel Video Frame Analysis Report',
+                    report_date: frameAnalysis?.report_date || '',
+                    predicted_class: frameClassification?.predicted_class || '',
+                    confidence: frameClassification?.confidence || 0,
+                    analysis_text: frameAnalysis?.analysis || '',
+                    panel_id: frameAnalysis?.panel_id || '',
+                    model_type: frameClassification?.model_type || '',
+                    source: frameAnalysis?.source || '',
+                    filename: `${result?.filename || 'video'} (Frame ${frameIndex})`,
+                }),
+            });
+            if (!res.ok) throw new Error('Download failed');
+            const blob = await res.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            const disposition = res.headers.get('Content-Disposition') || '';
+            const match = disposition.match(/filename="(.+?)"/);
+            a.download = match ? match[1] : 'solarmind_video_report.txt';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(url);
+        } catch (err) {
+            setError('Failed to download report.');
+        } finally {
+            setDownloading(false);
+        }
+    };
+
     const handleReset = () => {
         setFile(null);
         if (preview) URL.revokeObjectURL(preview);
@@ -107,6 +145,59 @@ export default function VideoUpload() {
         const m = Math.floor(sec / 60);
         const s = Math.floor(sec % 60);
         return `${m}:${s.toString().padStart(2, '0')}`;
+    };
+
+    const parseReportSections = (analysisText) => {
+        if (!analysisText) return [];
+        const sections = [];
+        const sectionIcons = {
+            'executive summary': '📋',
+            'defect classification': '🏷️',
+            'detailed technical': '🔬',
+            'estimated panel lifetime': '⏳',
+            'energy loss': '⚡',
+            'root cause': '🔎',
+            'recommended corrective': '🔧',
+            'preventive maintenance': '🛡️',
+            'safety considerations': '⚠️',
+            'conclusion': '🎯',
+        };
+
+        const lines = analysisText.split('\n');
+        let currentSection = null;
+        let currentContent = [];
+
+        for (const line of lines) {
+            const sectionMatch = line.match(/^\s*(\d+)\.\s*\*\*(.*?)\*\*:?\s*(.*)/);
+            if (sectionMatch) {
+                if (currentSection) {
+                    sections.push({ ...currentSection, content: currentContent.join('\n').trim() });
+                }
+                const num = sectionMatch[1];
+                const title = sectionMatch[2];
+                const rest = sectionMatch[3] || '';
+                let icon = '📄';
+                for (const [key, ico] of Object.entries(sectionIcons)) {
+                    if (title.toLowerCase().includes(key)) { icon = ico; break; }
+                }
+                currentSection = { num, title, icon };
+                currentContent = rest ? [rest] : [];
+            } else if (currentSection) {
+                currentContent.push(line);
+            }
+        }
+        if (currentSection) {
+            sections.push({ ...currentSection, content: currentContent.join('\n').trim() });
+        }
+
+        return sections;
+    };
+
+    const renderMarkdownLine = (line, i) => {
+        const html = line
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/^- /, '• ');
+        return <p key={i} dangerouslySetInnerHTML={{ __html: html }} />;
     };
 
     return (
@@ -309,17 +400,55 @@ export default function VideoUpload() {
                                     </div>
                                 </div>
 
-                                {/* Expanded: Sarvam AI Analysis */}
+                                {/* Expanded: Detailed Report */}
                                 {expandedFrame === i && frame.analysis?.analysis && (
-                                    <div className="frame-analysis-expanded">
+                                    <div className="frame-analysis-expanded" onClick={e => e.stopPropagation()}>
                                         <div className="frame-analysis-title">
-                                            {frame.analysis?.source === 'sarvam-ai' ? '🧠 Sarvam AI' : '📋 Report'}
+                                            {frame.analysis?.source === 'sarvam-ai' ? '🧠 Sarvam AI Analysis Report' : '📋 Detailed Report'}
                                         </div>
                                         <div className="frame-analysis-text">
-                                            {frame.analysis.analysis.split('\n').map((line, j) => (
-                                                <p key={j} dangerouslySetInnerHTML={{ __html: line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>') }} />
-                                            ))}
+                                            {(() => {
+                                                const sections = parseReportSections(frame.analysis.analysis);
+                                                if (sections.length > 0) {
+                                                    return (
+                                                        <div className="report-sections compact">
+                                                            {sections.map((section, idx) => (
+                                                                <div key={idx} className="report-section">
+                                                                    <div className="report-section-header">
+                                                                        <span className="report-section-icon">{section.icon}</span>
+                                                                        <span className="report-section-num">{section.num}.</span>
+                                                                        <span className="report-section-title">{section.title}</span>
+                                                                    </div>
+                                                                    <div className="report-section-content">
+                                                                        {section.content.split('\n').map((line, j) => {
+                                                                            if (!line.trim()) return null;
+                                                                            return renderMarkdownLine(line, j);
+                                                                        })}
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    );
+                                                }
+                                                return frame.analysis.analysis.split('\n').map((line, j) => (
+                                                    renderMarkdownLine(line, j)
+                                                ));
+                                            })()}
                                         </div>
+                                        <button
+                                            className="report-download-btn compact"
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleDownloadReport(frame.analysis, frame.classification, i);
+                                            }}
+                                            disabled={downloading}
+                                        >
+                                            {downloading ? (
+                                                <><span className="spinner"></span> Downloading...</>
+                                            ) : (
+                                                '📥 Download Frame Report'
+                                            )}
+                                        </button>
                                     </div>
                                 )}
                             </div>

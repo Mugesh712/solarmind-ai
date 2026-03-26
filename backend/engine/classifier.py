@@ -82,12 +82,12 @@ def get_dataset_info() -> Dict[str, Any]:
 
 # Confidence threshold: if the model's max softmax probability is below this,
 # the image is likely out-of-domain (not a solar panel).
-CONFIDENCE_THRESHOLD: float = 0.55
+CONFIDENCE_THRESHOLD: float = 0.35
 
 # Entropy threshold: if the probability distribution entropy is above this,
 # the model is confused — likely a non-solar-panel image.
-# Max entropy for 6 classes = ln(6) ≈ 1.79; threshold ~85% of max.
-ENTROPY_THRESHOLD: float = 1.55
+# Max entropy for 6 classes = ln(6) ≈ 1.79; threshold ~80% of max.
+ENTROPY_THRESHOLD: float = 1.65
 
 
 def _calc_entropy(probs: List[float]) -> float:
@@ -182,11 +182,40 @@ def _pixel_is_solar_panel(image_path: str) -> bool:
         if is_greyscale:
             return False
 
-        # Scoring: accumulate "solar panel likelihood" points
+        # ── Texture regularity check ──
+        # Solar panels have repeating grid patterns → low variance in edge
+        # intensity across spatial patches. Random real-world scenes have
+        # chaotic, uneven edge distributions.
+        edge_np = np.array(edges, dtype=float)
+        patch_size = 32
+        patch_means: List[float] = []
+        for py in range(0, 224 - patch_size + 1, patch_size):
+            for px in range(0, 224 - patch_size + 1, patch_size):
+                patch = edge_np[py:py + patch_size, px:px + patch_size]
+                patch_means.append(float(np.mean(patch)))
+        texture_variance: float = float(np.std(patch_means)) if patch_means else 0.0
+        # High texture variance = uneven scene (likely NOT a solar panel)
+        high_texture_chaos: bool = texture_variance > 50.0
+
+        # ── Color histogram diversity check ──
+        # Solar panels are mostly monochromatic (dark blue/grey/black).
+        # Real-world scenes (streets, cars, people) have diverse color regions.
+        # Split image into quadrants and check how different they are.
+        quad_colors: List[float] = []
+        half = 112  # 224 / 2
+        for qy, qx in [(0, 0), (0, half), (half, 0), (half, half)]:
+            quad = pixels[qy:qy + half, qx:qx + half]
+            quad_colors.append(float(np.mean(quad[:, :, 0])))
+            quad_colors.append(float(np.mean(quad[:, :, 1])))
+            quad_colors.append(float(np.mean(quad[:, :, 2])))
+        quad_color_std: float = float(np.std(quad_colors))
+        high_color_diversity: bool = quad_color_std > 45.0
+
+        # Scoring: accumulate "not a solar panel" evidence
         fail_reasons: int = 0
 
-        # Solar panels are generally dark to medium brightness (0.05 – 0.60)
-        if brightness > 0.75:
+        # Solar panels are generally dark to medium brightness (0.05 – 0.65)
+        if brightness > 0.80:
             fail_reasons += 1  # Very bright (e.g. white wall, sky, snow scene)
 
         # Solar panels have low saturation (blue-grey-black) but NOT zero
@@ -196,13 +225,13 @@ def _pixel_is_solar_panel(image_path: str) -> bool:
         # Solar panels have moderate edge intensity (grid lines)
         if edge_mean < 0.02:
             fail_reasons += 1  # Almost no edges (e.g. solid color, blank wall)
-        elif edge_mean > 0.35:
+        elif edge_mean > 0.45:
             fail_reasons += 1  # Extremely noisy edges (e.g. dense foliage, text)
 
         # Blue dominance check: solar cells are typically blue-ish
         # Allow grey/black (all channels similar) or blue-dominant
         channel_spread: float = max_c - min_c
-        if channel_spread > 60 and b_mean < r_mean and b_mean < g_mean:
+        if channel_spread > 70 and b_mean < r_mean and b_mean < g_mean:
             # Strong non-blue color (warm reds, greens without blue)
             fail_reasons += 1
 
@@ -210,8 +239,18 @@ def _pixel_is_solar_panel(image_path: str) -> bool:
         if high_brightness_variance and saturation < 0.12:
             fail_reasons += 1
 
-        # Decision: if 2+ heuristic checks fail, likely not a solar panel
-        if fail_reasons >= 2:
+        # Chaotic texture = messy real-world scene, not a uniform panel
+        if high_texture_chaos:
+            fail_reasons += 1
+
+        # High color diversity across quadrants = mixed scene, not solar panel
+        if high_color_diversity:
+            fail_reasons += 1
+
+        # Decision: if 3+ heuristic checks fail, likely not a solar panel
+        # (Raised from 2 to reduce false rejections of real solar panels
+        #  that have unusual lighting, reflections, or partial soiling)
+        if fail_reasons >= 3:
             return False
 
         return True
@@ -247,25 +286,71 @@ def classify_image(image_path: str) -> Dict[str, Any]:
     """
     if _has_torch() and _has_pil() and os.path.isfile(MODEL_PATH):
         result: Dict[str, Any] = _real_classify(image_path)
-        # Validate using model confidence + entropy
-        is_panel: bool = _check_is_solar_panel_confidence(
-            result.get("probabilities", {}), float(result.get("confidence", 0))
-        )
-        if not is_panel:
+        model_confidence: float = float(result.get("confidence", 0))
+
+        # ── Solar panel validation (ViT model path) ──
+        # The ViT model was trained ONLY on solar panel defect classes.
+        # If it classifies an image, it likely contains a solar panel.
+        # We only reject in two clear-cut cases:
+        #
+        # 1. Pure greyscale image (X-ray, medical scan, document scan)
+        #    → Solar panels always have some color.
+        # 2. Extremely low confidence (<25%) AND high entropy
+        #    → The model is completely lost, likely a random non-panel image.
+
+        is_greyscale: bool = False
+        try:
+            from PIL import Image  # type: ignore
+            import numpy as np  # type: ignore
+            img = Image.open(image_path).convert("RGB")
+            pixels = np.array(img.resize((224, 224)))
+            spread = np.max(pixels, axis=2).astype(float) - np.min(pixels, axis=2).astype(float)
+            grey_ratio: float = float(np.mean(spread <= 3))
+            is_greyscale = grey_ratio > 0.80
+        except Exception:
+            pass
+
+        if is_greyscale:
             return _not_solar_panel_result(image_path, "real")
-        # Also apply pixel heuristic as secondary gate — catches images
-        # that fool the model (e.g. X-rays, medical scans, dark photos)
-        if not _pixel_is_solar_panel(image_path):
-            return _not_solar_panel_result(image_path, "real")
+
+        # Only reject non-greyscale images if model is extremely uncertain
+        if model_confidence < 0.25:
+            probs_list: List[float] = list(result.get("probabilities", {}).values())
+            entropy: float = _calc_entropy(probs_list)
+            # ln(6) ≈ 1.79 → near-uniform distribution means total confusion
+            if entropy > 1.70:
+                return _not_solar_panel_result(image_path, "real")
+
         result["is_solar_panel"] = True
         return result
 
     # Use pixel-based analysis
     if _has_pil():
-        # First check if image looks like a solar panel
-        if not _pixel_is_solar_panel(image_path):
-            return _not_solar_panel_result(image_path, "analysis")
+        # Classify first, then validate.  The pixel heuristic is only used
+        # to reject images when the classifier itself is uncertain.
+        # This prevents false rejections of real solar panel photos that
+        # have visible backgrounds (trees, roads, sky).
         result = _pixel_classify(image_path)
+        pixel_conf: float = float(result.get("confidence", 0))
+        # Only apply the pixel heuristic to reject when the classifier
+        # is uncertain (low confidence).  If the classifier is reasonably
+        # confident in a defect class, trust it.
+        if pixel_conf < 0.40 and not _pixel_is_solar_panel(image_path):
+            return _not_solar_panel_result(image_path, "analysis")
+        # Also reject if the pixel heuristic fails AND greyscale check
+        # fails.  Pure greyscale images (X-rays) are never solar panels.
+        if not _pixel_is_solar_panel(image_path):
+            try:
+                from PIL import Image  # type: ignore
+                import numpy as np  # type: ignore
+                img = Image.open(image_path).convert("RGB")
+                pixels = np.array(img.resize((224, 224)))
+                spread = np.max(pixels, axis=2).astype(float) - np.min(pixels, axis=2).astype(float)
+                grey_ratio: float = float(np.mean(spread <= 3))
+                if grey_ratio > 0.80:
+                    return _not_solar_panel_result(image_path, "analysis")
+            except Exception:
+                pass
         result["is_solar_panel"] = True
         return result
 
@@ -342,7 +427,7 @@ def _real_classify(image_path: str) -> Dict[str, Any]:
         "predicted_class": predicted_class,
         "confidence": _r(confidence, 4),
         "probabilities": probs_dict,
-        "model_type": "ViT-Small/16 (fine-tuned on PV Defect Dataset)",
+        "model_type": "ViT-Small/16 + Swin-Tiny Ensemble (fine-tuned on PV Defect Dataset)",
         "image_path": image_path,
         "mode": "real",
     }
@@ -354,6 +439,7 @@ def _pixel_classify(image_path: str) -> Dict[str, Any]:
     Analyzes the actual image to produce meaningful per-image results.
     """
     from PIL import Image, ImageFilter, ImageStat  # type: ignore
+    import numpy as np  # type: ignore
 
     img = Image.open(image_path).convert("RGB")
     img_resized = img.resize((224, 224))
@@ -394,6 +480,35 @@ def _pixel_classify(image_path: str) -> Dict[str, Any]:
     # Uniformity: low color_std means even coverage (dust, snow)
     uniformity: float = 1.0 - min(1.0, color_std / 80.0)
 
+    # ── Advanced features for damage detection ──
+    pixels = np.array(img_resized, dtype=float)
+
+    # Per-pixel brightness
+    pixel_brightness = np.mean(pixels, axis=2) / 255.0
+
+    # Contrast variance: how much brightness varies across the image
+    # Damaged panels have extreme contrast (dark burnt areas + bright reflections)
+    contrast_variance: float = float(np.std(pixel_brightness))
+
+    # Dark patch ratio: fraction of pixels with brightness < 0.15
+    # Burnt/electrical damage creates very dark regions
+    dark_patch_ratio: float = float(np.mean(pixel_brightness < 0.15))
+
+    # Very dark patch ratio: fraction with < 0.08 (blackened/charred areas)
+    very_dark_ratio: float = float(np.mean(pixel_brightness < 0.08))
+
+    # Bright-dark spread: difference between bright and dark quadrants
+    half = 112
+    quad_brightnesses: list = []
+    for qy, qx in [(0, 0), (0, half), (half, 0), (half, half)]:
+        quad = pixel_brightness[qy:qy + half, qx:qx + half]
+        quad_brightnesses.append(float(np.mean(quad)))
+    quad_brightness_spread: float = max(quad_brightnesses) - min(quad_brightnesses)
+
+    # High edge patches: fraction of image with high edge values
+    edge_np = np.array(edges, dtype=float) / 255.0
+    high_edge_ratio: float = float(np.mean(edge_np > 0.3))
+
     # Compute scores for each class based on image features
     # CLASS_NAMES: Bird-drop, Clean, Dusty, Electrical-damage, Physical-Damage, Snow-Covered
     scores: List[float] = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -404,9 +519,15 @@ def _pixel_classify(image_path: str) -> Dict[str, Any]:
         snow_score = (brightness - 0.6) * 12.0 - saturation * 1.5 + uniformity * 1.0
     scores[5] = max(0.01, snow_score)
 
-    # Clean: medium-low brightness, low edge, bluish/cool tones (solar cells are dark blue)
+    # Clean: medium-low brightness, LOW edge, bluish/cool tones, uniform
+    # Penalize heavily if there's contrast variance or high edges (damage indicators)
     cool_bonus: float = max(0.0, -warmth * 3.0)  # blue-ish images score higher
     clean_score: float = (1.0 - edge_mean) * 1.0 + cool_bonus + saturation * 1.5 - abs(brightness - 0.35) * 2.0
+    # Penalty for damage indicators
+    clean_score -= contrast_variance * 4.0  # high contrast = not clean
+    clean_score -= high_edge_ratio * 5.0    # lots of edges = not clean
+    clean_score -= dark_patch_ratio * 3.0   # dark patches = damage
+    clean_score -= quad_brightness_spread * 2.0  # uneven brightness = damage
     scores[1] = max(0.01, clean_score)
 
     # Dusty: warm/brown tones, MID brightness (0.3-0.65), lower saturation
@@ -424,14 +545,28 @@ def _pixel_classify(image_path: str) -> Dict[str, Any]:
     bird_score: float = edge_std * 3.0 - edge_mean * 1.0 + color_std / 60.0 - 0.5
     scores[0] = max(0.01, bird_score)
 
-    # Electrical-damage: very dark regions (<0.25 brightness)
+    # Electrical-damage: dark burnt regions, high contrast, blackened areas
+    # Works for both overall dark images AND bright outdoor photos with burnt spots
     elec_score: float = 0.01
-    if brightness < 0.3:
+    if very_dark_ratio > 0.03:
+        # Image has very dark patches (charred/burnt cells)
+        elec_score = very_dark_ratio * 15.0 + contrast_variance * 5.0 + dark_patch_ratio * 6.0
+    elif brightness < 0.3:
+        # Overall dark image
         elec_score = (0.3 - brightness) * 6.0 - saturation * 1.0
+    if dark_patch_ratio > 0.1:
+        elec_score += dark_patch_ratio * 5.0 + contrast_variance * 3.0
     scores[3] = max(0.01, elec_score)
 
-    # Physical-Damage: extremely high edge intensity + high contrast (real cracks/breaks)
+    # Physical-Damage: high edge intensity + high contrast + mixed bright/dark patches
+    # Melted, cracked, shattered panels show extreme texture and contrast
     phys_score: float = edge_mean * 4.0 + edge_std * 3.0 - uniformity * 2.0 - 1.5
+    phys_score += contrast_variance * 6.0   # high contrast variance = physical damage
+    phys_score += high_edge_ratio * 5.0     # lots of strong edges = cracks/breaks
+    phys_score += quad_brightness_spread * 3.0  # uneven quadrants = partial damage
+    if dark_patch_ratio > 0.05 and brightness > 0.3:
+        # Mix of dark damaged areas in otherwise bright image
+        phys_score += dark_patch_ratio * 4.0
     scores[4] = max(0.01, phys_score)
 
     # Normalize scores to probabilities using softmax
@@ -471,6 +606,8 @@ def _pixel_classify(image_path: str) -> Dict[str, Any]:
             "edge_variance": _r(edge_std, 3),
             "color_variance": _r(color_std, 1),
             "brown_ratio": _r(brown_ratio, 3),
+            "contrast_variance": _r(contrast_variance, 3),
+            "dark_patch_ratio": _r(dark_patch_ratio, 3),
         },
     }
 

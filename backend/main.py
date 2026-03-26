@@ -16,9 +16,12 @@ import random
 import asyncio
 import tempfile
 import base64
+import io
 from fastapi import FastAPI, HTTPException, UploadFile, File, WebSocket, WebSocketDisconnect  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
+from fastapi.responses import StreamingResponse  # type: ignore
 from fastapi.staticfiles import StaticFiles  # type: ignore
+from pydantic import BaseModel  # type: ignore
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Dict, List, Optional
 from datetime import datetime
@@ -651,6 +654,34 @@ async def analyze_video(file: UploadFile = File(...)) -> Dict[str, Any]:
                 "analysis": analysis,
             })
 
+        # ── Majority voting ──────────────────────────────────────────
+        # If >= 50% of frames are "Not a Solar Panel", this is clearly
+        # not a solar panel video.  Override any stray misclassified
+        # frames so the entire video is reported as non-panel.
+        total_analyzed: int = len(frame_results)
+        if total_analyzed > 0 and non_panel_frames >= total_analyzed * 0.5:
+            # Re-mark every frame as non-panel
+            non_panel_frames = total_analyzed
+            defect_counts = {"Not a Solar Panel": total_analyzed}
+            for fr in frame_results:
+                fr["classification"] = {
+                    "predicted_class": "Not a Solar Panel",
+                    "confidence": 0.0,
+                    "probabilities": {},
+                    "model_type": "Solar Panel Validation",
+                    "is_solar_panel": False,
+                    "message": (
+                        "The uploaded video does not appear to contain solar panels. "
+                        "Please upload a video of solar panels for defect analysis."
+                    ),
+                    "mode": fr["classification"].get("mode", "analysis"),
+                }
+                fr["analysis"] = {
+                    "analysis": "No solar panel detected in this frame.",
+                    "source": "validation",
+                    "severity": "none",
+                }
+
         # Determine dominant defect (excluding non-panel frames)
         panel_defect_counts: Dict[str, int] = {
             k: v for k, v in defect_counts.items() if k != "Not a Solar Panel"
@@ -787,6 +818,604 @@ async def sarvam_status() -> Dict[str, Any]:
     """Check Sarvam AI API status."""
     return get_api_status()
 
+
+# ──────────────────────────────────────────────
+# REPORT DOWNLOAD ENDPOINT
+# ──────────────────────────────────────────────
+
+class ReportDownloadRequest(BaseModel):
+    """Request body for downloading an analysis report."""
+    report_title: str = "Solar Panel Defect Analysis Report"
+    report_date: str = ""
+    predicted_class: str = ""
+    confidence: float = 0.0
+    analysis_text: str = ""
+    panel_id: str = ""
+    model_type: str = ""
+    source: str = ""
+    filename: str = ""
+
+
+@app.post("/api/report/download")
+async def download_report(req: ReportDownloadRequest) -> StreamingResponse:
+    """
+    Generate a downloadable analysis report as a professional PDF.
+    Uses reportlab to create a well-formatted, colored PDF report.
+    """
+    import re
+    from reportlab.lib.pagesizes import A4  # type: ignore
+    from reportlab.lib.units import mm  # type: ignore
+    from reportlab.lib.colors import HexColor  # type: ignore
+    from reportlab.platypus import (  # type: ignore
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    )
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle  # type: ignore
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT, TA_RIGHT  # type: ignore
+
+    report_date: str = req.report_date or datetime.now().strftime("%d %B %Y, %I:%M %p")
+    panel_label: str = req.panel_id or "Uploaded Panel"
+    conf_pct: str = f"{req.confidence:.1%}" if req.confidence > 0 else "N/A"
+
+    # ── Colors ──
+    primary = HexColor("#1e293b")
+    accent_blue = HexColor("#3b82f6")
+    accent_green = HexColor("#10b981")
+    accent_red = HexColor("#ef4444")
+    accent_orange = HexColor("#f97316")
+    accent_yellow = HexColor("#eab308")
+    light_bg = HexColor("#f1f5f9")
+    white = HexColor("#ffffff")
+    dark_text = HexColor("#0f172a")
+    muted_text = HexColor("#64748b")
+    section_blue_bg = HexColor("#eff6ff")
+    section_purple_bg = HexColor("#f5f3ff")
+
+    # Severity color lookup
+    def get_severity_color(text: str) -> HexColor:
+        lower = text.lower()
+        if "critical" in lower:
+            return accent_red
+        if "high" in lower:
+            return accent_orange
+        if "medium" in lower:
+            return accent_yellow
+        if "low" in lower:
+            return accent_green
+        return muted_text
+
+    # ── Styles ──
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle(
+        "ReportTitle", parent=styles["Title"],
+        fontSize=18, textColor=white, alignment=TA_CENTER,
+        spaceAfter=4, fontName="Helvetica-Bold",
+    ))
+    styles.add(ParagraphStyle(
+        "ReportSubtitle", parent=styles["Normal"],
+        fontSize=9, textColor=HexColor("#94a3b8"), alignment=TA_CENTER,
+        spaceAfter=0, fontName="Helvetica",
+    ))
+    styles.add(ParagraphStyle(
+        "SectionTitle", parent=styles["Heading2"],
+        fontSize=11, textColor=accent_blue, fontName="Helvetica-Bold",
+        spaceBefore=6, spaceAfter=4, leftIndent=4,
+    ))
+    styles.add(ParagraphStyle(
+        "SectionBody", parent=styles["Normal"],
+        fontSize=9, textColor=dark_text, fontName="Helvetica",
+        leading=14, leftIndent=8, rightIndent=8, spaceAfter=2,
+    ))
+    styles.add(ParagraphStyle(
+        "BulletItem", parent=styles["Normal"],
+        fontSize=9, textColor=dark_text, fontName="Helvetica",
+        leading=14, leftIndent=20, rightIndent=8, bulletIndent=12,
+    ))
+    styles.add(ParagraphStyle(
+        "MetaLabel", parent=styles["Normal"],
+        fontSize=9, textColor=muted_text, fontName="Helvetica-Bold",
+    ))
+    styles.add(ParagraphStyle(
+        "MetaValue", parent=styles["Normal"],
+        fontSize=9, textColor=dark_text, fontName="Helvetica",
+    ))
+    styles.add(ParagraphStyle(
+        "Disclaimer", parent=styles["Normal"],
+        fontSize=7, textColor=muted_text, fontName="Helvetica-Oblique",
+        alignment=TA_CENTER, leading=10,
+    ))
+    styles.add(ParagraphStyle(
+        "Footer", parent=styles["Normal"],
+        fontSize=7, textColor=muted_text, fontName="Helvetica",
+        alignment=TA_CENTER,
+    ))
+
+    # ── Build PDF ──
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        topMargin=15 * mm, bottomMargin=15 * mm,
+        leftMargin=18 * mm, rightMargin=18 * mm,
+    )
+
+    story: List[Any] = []
+
+    # ── Header Banner ──
+    header_data = [[
+        Paragraph("☀️  S O L A R M I N D   A I", styles["ReportTitle"]),
+    ], [
+        Paragraph("Solar Panel Defect Analysis Report", styles["ReportSubtitle"]),
+    ]]
+    header_table = Table(header_data, colWidths=[doc.width])
+    header_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), primary),
+        ("TOPPADDING", (0, 0), (-1, 0), 14),
+        ("BOTTOMPADDING", (0, -1), (-1, -1), 10),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("ROUNDEDCORNERS", [6, 6, 6, 6]),
+    ]))
+    story.append(header_table)
+    story.append(Spacer(1, 10))
+
+    # ── Metadata Table ──
+    severity_color = get_severity_color(req.analysis_text)
+
+    meta_data = [
+        [Paragraph("<b>Report Date</b>", styles["MetaLabel"]),
+         Paragraph(report_date, styles["MetaValue"]),
+         Paragraph("<b>Panel ID</b>", styles["MetaLabel"]),
+         Paragraph(panel_label, styles["MetaValue"])],
+        [Paragraph("<b>Defect Type</b>", styles["MetaLabel"]),
+         Paragraph(f"<b>{req.predicted_class}</b>", styles["MetaValue"]),
+         Paragraph("<b>Confidence</b>", styles["MetaLabel"]),
+         Paragraph(f"<b>{conf_pct}</b>", styles["MetaValue"])],
+        [Paragraph("<b>AI Model</b>", styles["MetaLabel"]),
+         Paragraph(req.model_type or "ViT-Small/16 + Swin-Tiny Ensemble", styles["MetaValue"]),
+         Paragraph("<b>Analysis Engine</b>", styles["MetaLabel"]),
+         Paragraph(req.source or "Sarvam AI (sarvam-m)", styles["MetaValue"])],
+        [Paragraph("<b>Source File</b>", styles["MetaLabel"]),
+         Paragraph(req.filename or "N/A", styles["MetaValue"]),
+         Paragraph("", styles["MetaLabel"]),
+         Paragraph("", styles["MetaValue"])],
+    ]
+    col_w = doc.width / 4
+    meta_table = Table(meta_data, colWidths=[col_w * 0.8, col_w * 1.2, col_w * 0.8, col_w * 1.2])
+    meta_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), light_bg),
+        ("GRID", (0, 0), (-1, -1), 0.5, HexColor("#e2e8f0")),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("ROUNDEDCORNERS", [4, 4, 4, 4]),
+    ]))
+    story.append(meta_table)
+    story.append(Spacer(1, 12))
+
+    # ── Parse and render report sections ──
+    clean_analysis: str = req.analysis_text
+    # Parse numbered sections: "1. **Title**: content..."
+    section_pattern = re.compile(r'(\d+)\.\s*\*\*(.*?)\*\*:?\s*(.*?)(?=\n\d+\.\s*\*\*|\Z)', re.DOTALL)
+    matches = section_pattern.findall(clean_analysis)
+
+    section_icons = {
+        "executive summary": "📋",
+        "defect classification": "🏷️",
+        "detailed technical": "🔬",
+        "estimated panel lifetime": "⏳",
+        "energy loss": "⚡",
+        "root cause": "🔎",
+        "recommended corrective": "🔧",
+        "preventive maintenance": "🛡️",
+        "safety considerations": "⚠️",
+        "conclusion": "🎯",
+    }
+
+    for idx, (num, title, content) in enumerate(matches):
+        # Get icon
+        icon = "📄"
+        for key, ico in section_icons.items():
+            if key in title.lower():
+                icon = ico
+                break
+
+        # Alternating background color
+        bg_color = section_blue_bg if idx % 2 == 0 else section_purple_bg
+
+        # Section title
+        section_title = Paragraph(
+            f"{icon}  {num}. {title}",
+            styles["SectionTitle"],
+        )
+
+        # Section content — process lines
+        content_parts: List[Any] = []
+        for line in content.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            # Convert markdown bold
+            line = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', line)
+            if line.startswith("- "):
+                content_parts.append(Paragraph(f"• {line[2:]}", styles["BulletItem"]))
+            else:
+                content_parts.append(Paragraph(line, styles["SectionBody"]))
+
+        # Wrap section in a table for background color
+        section_rows = [[section_title]]
+        for part in content_parts:
+            section_rows.append([part])
+
+        section_table = Table(section_rows, colWidths=[doc.width - 4])
+        section_style_cmds = [
+            ("BACKGROUND", (0, 0), (-1, -1), bg_color),
+            ("TOPPADDING", (0, 0), (-1, 0), 8),
+            ("BOTTOMPADDING", (0, -1), (-1, -1), 8),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("ROUNDEDCORNERS", [4, 4, 4, 4]),
+        ]
+        # Add a left border accent
+        border_color = accent_blue if idx % 2 == 0 else HexColor("#8b5cf6")
+        section_style_cmds.append(
+            ("LINEBEFOREDECORATORWIDTH", (0, 0), (0, -1), 3)
+        )
+        section_table.setStyle(TableStyle(section_style_cmds))
+        story.append(section_table)
+        story.append(Spacer(1, 3))
+
+    # If no sections were parsed, render raw text
+    if not matches:
+        clean_text: str = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', clean_analysis)
+        for line in clean_text.split("\n"):
+            line = line.strip()
+            if line:
+                story.append(Paragraph(line, styles["SectionBody"]))
+
+    story.append(Spacer(1, 16))
+
+    # ── Disclaimer ──
+    disclaimer_data = [[Paragraph(
+        "⚠️ <b>DISCLAIMER:</b> This report was generated by SolarMind AI, an automated solar panel "
+        "inspection and analysis system. The findings are based on computer vision classification "
+        "and should be verified by a qualified solar panel technician before taking any corrective action.",
+        styles["Disclaimer"],
+    )]]
+    disclaimer_table = Table(disclaimer_data, colWidths=[doc.width])
+    disclaimer_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), HexColor("#fef3c7")),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+        ("ROUNDEDCORNERS", [4, 4, 4, 4]),
+    ]))
+    story.append(disclaimer_table)
+    story.append(Spacer(1, 8))
+
+    # Footer
+    story.append(Paragraph(
+        f"Generated by SolarMind AI v2.0 | Powered by Sarvam AI | {report_date}",
+        styles["Footer"],
+    ))
+
+    # Build PDF
+    doc.build(story)
+    buffer.seek(0)
+
+    # Generate filename
+    safe_class: str = req.predicted_class.replace(" ", "_").replace("-", "_").lower()
+    download_filename: str = f"solarmind_report_{safe_class}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{download_filename}"',
+        },
+    )
+
+
+class ReportEmailRequest(BaseModel):
+    """Request body for emailing an analysis report."""
+    recipient_email: str
+    report_title: str = "Solar Panel Defect Analysis Report"
+    report_date: str = ""
+    predicted_class: str = ""
+    confidence: float = 0.0
+    analysis_text: str = ""
+    panel_id: str = ""
+    model_type: str = ""
+    source: str = ""
+    filename: str = ""
+
+
+def _build_report_pdf(req: Any) -> bytes:
+    """
+    Build a PDF report and return raw bytes.
+    Shared by both the download and email endpoints.
+    `req` must have: report_title, report_date, predicted_class,
+    confidence, analysis_text, panel_id, model_type, source, filename.
+    """
+    import re as _re
+    from reportlab.lib.pagesizes import A4  # type: ignore
+    from reportlab.lib.units import mm  # type: ignore
+    from reportlab.lib.colors import HexColor  # type: ignore
+    from reportlab.platypus import (  # type: ignore
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    )
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle  # type: ignore
+    from reportlab.lib.enums import TA_CENTER  # type: ignore
+
+    report_date: str = req.report_date or datetime.now().strftime("%d %B %Y, %I:%M %p")
+    panel_label: str = req.panel_id or "Uploaded Panel"
+    conf_pct: str = f"{req.confidence:.1%}" if req.confidence > 0 else "N/A"
+
+    # Colors
+    primary = HexColor("#1e293b")
+    accent_blue = HexColor("#3b82f6")
+    light_bg = HexColor("#f1f5f9")
+    white = HexColor("#ffffff")
+    dark_text = HexColor("#0f172a")
+    muted_text = HexColor("#64748b")
+    section_blue_bg = HexColor("#eff6ff")
+    section_purple_bg = HexColor("#f5f3ff")
+
+    # Styles
+    styles = getSampleStyleSheet()
+    styles.add(ParagraphStyle("ReportTitle", parent=styles["Title"],
+        fontSize=18, textColor=white, alignment=TA_CENTER,
+        spaceAfter=4, fontName="Helvetica-Bold"))
+    styles.add(ParagraphStyle("ReportSubtitle", parent=styles["Normal"],
+        fontSize=9, textColor=HexColor("#94a3b8"), alignment=TA_CENTER,
+        spaceAfter=0, fontName="Helvetica"))
+    styles.add(ParagraphStyle("SectionTitle", parent=styles["Heading2"],
+        fontSize=11, textColor=accent_blue, fontName="Helvetica-Bold",
+        spaceBefore=6, spaceAfter=4, leftIndent=4))
+    styles.add(ParagraphStyle("SectionBody", parent=styles["Normal"],
+        fontSize=9, textColor=dark_text, fontName="Helvetica",
+        leading=14, leftIndent=8, rightIndent=8, spaceAfter=2))
+    styles.add(ParagraphStyle("BulletItem", parent=styles["Normal"],
+        fontSize=9, textColor=dark_text, fontName="Helvetica",
+        leading=14, leftIndent=20, rightIndent=8, bulletIndent=12))
+    styles.add(ParagraphStyle("MetaLabel", parent=styles["Normal"],
+        fontSize=9, textColor=muted_text, fontName="Helvetica-Bold"))
+    styles.add(ParagraphStyle("MetaValue", parent=styles["Normal"],
+        fontSize=9, textColor=dark_text, fontName="Helvetica"))
+    styles.add(ParagraphStyle("Disclaimer", parent=styles["Normal"],
+        fontSize=7, textColor=muted_text, fontName="Helvetica-Oblique",
+        alignment=TA_CENTER, leading=10))
+    styles.add(ParagraphStyle("Footer", parent=styles["Normal"],
+        fontSize=7, textColor=muted_text, fontName="Helvetica",
+        alignment=TA_CENTER))
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4,
+        topMargin=15*mm, bottomMargin=15*mm,
+        leftMargin=18*mm, rightMargin=18*mm)
+
+    story: List[Any] = []
+
+    # Header
+    header_data = [[Paragraph("☀️  S O L A R M I N D   A I", styles["ReportTitle"])],
+                   [Paragraph("Solar Panel Defect Analysis Report", styles["ReportSubtitle"])]]
+    ht = Table(header_data, colWidths=[doc.width])
+    ht.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), primary),
+        ("TOPPADDING", (0, 0), (-1, 0), 14),
+        ("BOTTOMPADDING", (0, -1), (-1, -1), 10),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+        ("ROUNDEDCORNERS", [6, 6, 6, 6]),
+    ]))
+    story.append(ht)
+    story.append(Spacer(1, 10))
+
+    # Metadata
+    meta = [
+        [Paragraph("<b>Report Date</b>", styles["MetaLabel"]),
+         Paragraph(report_date, styles["MetaValue"]),
+         Paragraph("<b>Panel ID</b>", styles["MetaLabel"]),
+         Paragraph(panel_label, styles["MetaValue"])],
+        [Paragraph("<b>Defect Type</b>", styles["MetaLabel"]),
+         Paragraph(f"<b>{req.predicted_class}</b>", styles["MetaValue"]),
+         Paragraph("<b>Confidence</b>", styles["MetaLabel"]),
+         Paragraph(f"<b>{conf_pct}</b>", styles["MetaValue"])],
+        [Paragraph("<b>AI Model</b>", styles["MetaLabel"]),
+         Paragraph(req.model_type or "ViT+Swin Ensemble", styles["MetaValue"]),
+         Paragraph("<b>Engine</b>", styles["MetaLabel"]),
+         Paragraph(req.source or "Sarvam AI", styles["MetaValue"])],
+    ]
+    cw = doc.width / 4
+    mt = Table(meta, colWidths=[cw*0.8, cw*1.2, cw*0.8, cw*1.2])
+    mt.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), light_bg),
+        ("GRID", (0, 0), (-1, -1), 0.5, HexColor("#e2e8f0")),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+    ]))
+    story.append(mt)
+    story.append(Spacer(1, 12))
+
+    # Sections
+    section_pattern = _re.compile(r'(\d+)\.\s*\*\*(.*?)\*\*:?\s*(.*?)(?=\n\d+\.\s*\*\*|\Z)', _re.DOTALL)
+    matches = section_pattern.findall(req.analysis_text)
+    icons = {"executive summary": "📋", "defect classification": "🏷️",
+             "detailed technical": "🔬", "estimated panel lifetime": "⏳",
+             "energy loss": "⚡", "root cause": "🔎",
+             "recommended corrective": "🔧", "preventive maintenance": "🛡️",
+             "safety considerations": "⚠️", "conclusion": "🎯"}
+
+    for idx, (num, title, content) in enumerate(matches):
+        icon = "📄"
+        for k, v in icons.items():
+            if k in title.lower():
+                icon = v
+                break
+        bg = section_blue_bg if idx % 2 == 0 else section_purple_bg
+        rows = [[Paragraph(f"{icon}  {num}. {title}", styles["SectionTitle"])]]
+        for line in content.strip().split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+            line = _re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', line)
+            style = styles["BulletItem"] if line.startswith("- ") else styles["SectionBody"]
+            text = f"• {line[2:]}" if line.startswith("- ") else line
+            rows.append([Paragraph(text, style)])
+        st = Table(rows, colWidths=[doc.width - 4])
+        st.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (-1, -1), bg),
+            ("TOPPADDING", (0, 0), (-1, 0), 8),
+            ("BOTTOMPADDING", (0, -1), (-1, -1), 8),
+            ("LEFTPADDING", (0, 0), (-1, -1), 10),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+            ("ROUNDEDCORNERS", [4, 4, 4, 4]),
+        ]))
+        story.append(st)
+        story.append(Spacer(1, 3))
+
+    if not matches:
+        clean = _re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', req.analysis_text)
+        for line in clean.split("\n"):
+            line = line.strip()
+            if line:
+                story.append(Paragraph(line, styles["SectionBody"]))
+
+    story.append(Spacer(1, 16))
+
+    # Disclaimer
+    dt = Table([[Paragraph(
+        "⚠️ <b>DISCLAIMER:</b> This report was generated by SolarMind AI. "
+        "Findings should be verified by a qualified technician.",
+        styles["Disclaimer"])]], colWidths=[doc.width])
+    dt.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), HexColor("#fef3c7")),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+        ("LEFTPADDING", (0, 0), (-1, -1), 10),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+    ]))
+    story.append(dt)
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(
+        f"Generated by SolarMind AI v2.0 | Powered by Sarvam AI | {report_date}",
+        styles["Footer"]))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+@app.post("/api/report/email")
+async def email_report(req: ReportEmailRequest) -> Dict[str, Any]:
+    """
+    Generate the PDF report and send it to the specified email address.
+    Uses SMTP (Gmail by default) — requires SMTP_USER and SMTP_PASSWORD in .env.
+    """
+    import re
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.application import MIMEApplication
+
+    # Validate email format
+    email_pattern: str = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(email_pattern, req.recipient_email):
+        raise HTTPException(status_code=400, detail="Invalid email address format.")
+
+    # SMTP configuration from env
+    smtp_user: str = os.environ.get("SMTP_USER", "")
+    smtp_password: str = os.environ.get("SMTP_PASSWORD", "")
+    smtp_host: str = os.environ.get("SMTP_HOST", "smtp.gmail.com")
+    smtp_port: int = int(os.environ.get("SMTP_PORT", "587"))
+
+    if not smtp_user or not smtp_password:
+        raise HTTPException(
+            status_code=503,
+            detail="Email service not configured. Set SMTP_USER and SMTP_PASSWORD in .env file."
+        )
+
+    # Generate PDF
+    report_date: str = req.report_date or datetime.now().strftime("%d %B %Y, %I:%M %p")
+    conf_pct: str = f"{req.confidence:.1%}" if req.confidence > 0 else "N/A"
+
+    try:
+        pdf_bytes: bytes = _build_report_pdf(req)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate PDF: {str(e)}")
+
+    # Build email
+    msg = MIMEMultipart("mixed")
+    msg["From"] = smtp_user
+    msg["To"] = req.recipient_email
+    msg["Subject"] = f"SolarMind AI Report — {req.predicted_class} | {report_date}"
+
+    # HTML email body with summary
+    html_body: str = f"""
+    <div style="font-family: 'Helvetica', 'Arial', sans-serif; max-width: 600px; margin: 0 auto; background: #f8fafc; padding: 20px;">
+        <div style="background: #1e293b; color: white; padding: 24px; border-radius: 8px; text-align: center;">
+            <h1 style="margin: 0; font-size: 22px; letter-spacing: 2px;">☀️ SolarMind AI</h1>
+            <p style="margin: 4px 0 0; color: #94a3b8; font-size: 13px;">Solar Panel Defect Analysis Report</p>
+        </div>
+        <div style="background: white; padding: 24px; margin-top: 12px; border-radius: 8px; border: 1px solid #e2e8f0;">
+            <h2 style="margin: 0 0 16px; color: #0f172a; font-size: 16px;">📋 Report Summary</h2>
+            <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                <tr>
+                    <td style="padding: 8px 12px; color: #64748b; font-weight: 600;">Defect Detected</td>
+                    <td style="padding: 8px 12px; color: #0f172a; font-weight: 700;">⚡ {req.predicted_class}</td>
+                </tr>
+                <tr style="background: #f8fafc;">
+                    <td style="padding: 8px 12px; color: #64748b; font-weight: 600;">Confidence Score</td>
+                    <td style="padding: 8px 12px; color: #0f172a; font-weight: 700;">{conf_pct}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px 12px; color: #64748b; font-weight: 600;">AI Model</td>
+                    <td style="padding: 8px 12px; color: #0f172a;">{req.model_type or 'ViT+Swin Ensemble'}</td>
+                </tr>
+                <tr style="background: #f8fafc;">
+                    <td style="padding: 8px 12px; color: #64748b; font-weight: 600;">Report Date</td>
+                    <td style="padding: 8px 12px; color: #0f172a;">{report_date}</td>
+                </tr>
+            </table>
+            <p style="margin: 16px 0 0; color: #64748b; font-size: 13px;">
+                📎 The complete detailed analysis report is attached as a PDF.
+            </p>
+        </div>
+        <div style="text-align: center; padding: 16px; color: #94a3b8; font-size: 11px;">
+            Generated by SolarMind AI v2.0 | Powered by Sarvam AI
+        </div>
+    </div>
+    """
+    msg.attach(MIMEText(html_body, "html"))
+
+    # Attach PDF
+    safe_class: str = req.predicted_class.replace(" ", "_").replace("-", "_").lower()
+    pdf_filename: str = f"solarmind_report_{safe_class}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+    pdf_part = MIMEApplication(pdf_bytes, _subtype="pdf")
+    pdf_part.add_header("Content-Disposition", "attachment", filename=pdf_filename)
+    msg.attach(pdf_part)
+
+    # Send email
+    try:
+        server = smtplib.SMTP(smtp_host, smtp_port)
+        server.starttls()
+        server.login(smtp_user, smtp_password)
+        server.send_message(msg)
+        server.quit()
+    except smtplib.SMTPAuthenticationError:
+        raise HTTPException(
+            status_code=503,
+            detail="SMTP authentication failed. Check SMTP_USER and SMTP_PASSWORD."
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
+
+    return {
+        "success": True,
+        "message": f"Report sent successfully to {req.recipient_email}",
+        "recipient": req.recipient_email,
+    }
 
 # ──────────────────────────────────────────────
 # SITE & PANEL ENDPOINTS
